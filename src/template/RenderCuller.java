@@ -59,8 +59,6 @@ public class RenderCuller{
     private final IntSeq solidColors = new IntSeq();
     private int[] grid = new int[0];
 
-    /** Ventana flotante: recorta el render por GL (sin FrameBuffer, sin estirar) y descarta lo que queda fuera. */
-    private final FloatWindow win;
 
     private static final Class<?>[] CRAFTER_TYPES = initCrafterTypes();
     private final IntMap<SleepEntry> sleepMap = new IntMap<>();
@@ -72,7 +70,7 @@ public class RenderCuller{
     private int iconPx, solidPx, uIconPx, uSolidPx;
     private int poll;
 
-    private int sWin, sIn, sFog, sIcon, sSolidT, sSolidQ, sKept, sUI, sUS, frames;
+    private int sIn, sFog, sIcon, sSolidT, sSolidQ, sKept, sUI, sUS, frames;
     private long nanos, wNanos, wStart;
 
     private static Class<?>[] initCrafterTypes(){
@@ -92,8 +90,7 @@ public class RenderCuller{
         return list.toArray(new Class<?>[0]);
     }
 
-    public RenderCuller(FloatWindow win){
-        this.win = win;
+    public RenderCuller(){
         Events.run(Trigger.preDraw, this::onPreDraw);
         Events.run(Trigger.drawOver, this::applyBlockCull);
         Events.run(Trigger.postDraw, this::onPostDraw);
@@ -174,13 +171,11 @@ public class RenderCuller{
     private void onPreDraw(){
         restoreView();
         wStart = Time.nanos();
-        if(win != null) win.beginClip();
     }
 
     private void onPostDraw(){
         restoreView();
         wNanos += Time.nanos() - wStart;
-        if(win != null) win.endClip();
     }
 
     private void onUpdate(){
@@ -210,9 +205,7 @@ public class RenderCuller{
             scratch.clear();
             solidTiles.clear();
             solidColors.clear();
-            int fog = 0, icon = 0, outWin = 0;
-            boolean winOn = win != null && win.clipping();
-            if(winOn) win.prepareWorldRect(); // deja el rect en caché antes de leerlo desde varios hilos
+            int fog = 0, icon = 0;
 
             // ---- Fase 1: clasificar (solo lectura; se reparte entre núcleos si hay suficientes tiles) ----
             final int n = src.size;
@@ -224,7 +217,6 @@ public class RenderCuller{
             cFogOn = fogOn;
             cSolid = doSolid;
             cIcon = doIcon;
-            cWin = winOn;
             final Tile[] items = src.items;
 
             boolean ran = false;
@@ -245,7 +237,6 @@ public class RenderCuller{
                 Tile tile = items[i];
                 switch(act[i]){
                     case A_KEEP -> scratch.add(tile);
-                    case A_WIN -> outWin++;
                     case A_FOG -> fog++;
                     case A_SOLID -> {
                         solidTiles.add(tile);
@@ -266,7 +257,6 @@ public class RenderCuller{
                     }
                 }
             }
-            sWin += outWin;
 
             int quads = solidTiles.size > 0 ? emitSolid() : 0;
 
@@ -292,14 +282,14 @@ public class RenderCuller{
         }
     }
 
-    private static final byte A_KEEP = 0, A_WIN = 1, A_FOG = 2, A_SOLID = 3, A_ICON = 4;
+    private static final byte A_KEEP = 0, A_FOG = 2, A_SOLID = 3, A_ICON = 4;
     private static final int PAR_MIN_TILES = 3000, PAR_CHUNK = 1500;
 
     // Parámetros de la clasificación del frame actual (se escriben en el hilo principal antes de repartir).
     private byte[] act = new byte[0];
     private int[] col = new int[0];
     private Team cTeam;
-    private boolean cFogOn, cSolid, cIcon, cWin;
+    private boolean cFogOn, cSolid, cIcon;
     private boolean parallel = true, parFailed;
     private int sPar;
 
@@ -313,10 +303,6 @@ public class RenderCuller{
             Block block = tile.block();
             Building build = tile.build;
 
-            if(cWin && !win.worldVisible(tile.drawx(), tile.drawy(), block.size * 4f + 8f)){
-                act[i] = A_WIN;
-                continue;
-            }
             if(block == Blocks.air){
                 act[i] = A_KEEP;
                 continue;
@@ -423,10 +409,6 @@ public class RenderCuller{
     public boolean drawUnit(Unit unit){
         if(!on || unit.dead || unit.inFogTo(Vars.player.team())){
             return unit.inFogTo(Vars.player.team());
-        }
-
-        if(win != null && win.clipping() && !win.worldVisible(unit.x, unit.y, unit.hitSize + 16f)){
-            return true;
         }
 
         float ppt = (float)Core.graphics.getWidth() / Core.camera.width;
@@ -624,14 +606,14 @@ public class RenderCuller{
     private void flushStats(){
         if(statsOn && frames > 0){
             Log.info(String.format(
-                "[MO] bloques/f: total=%d fuera-ventana=%d fog=%d icon=%d solid=%d->%dq kept=%d | unidades: icon=%d solid=%d | sleep=%d | par=%d/%d | MO %.3fms | mundo %.2fms",
-                sIn / frames, sWin / frames, sFog / frames, sIcon / frames, sSolidT / frames, sSolidQ / frames, sKept / frames,
+                "[MO] bloques/f: total=%d fog=%d icon=%d solid=%d->%dq kept=%d | unidades: icon=%d solid=%d | sleep=%d | par=%d/%d | MO %.3fms | mundo %.2fms",
+                sIn / frames, sFog / frames, sIcon / frames, sSolidT / frames, sSolidQ / frames, sKept / frames,
                 sUI / frames, sUS / frames, sleepMap.size, sPar, frames,
                 nanos / (double)frames / 1e6, wNanos / (double)frames / 1e6));
         }
         frames = 0;
         sPar = 0;
-        sWin = sUS = sUI = sKept = sSolidQ = sSolidT = sIcon = sFog = sIn = 0;
+        sUS = sUI = sKept = sSolidQ = sSolidT = sIcon = sFog = sIn = 0;
         wNanos = nanos = 0L;
     }
 

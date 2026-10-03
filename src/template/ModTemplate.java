@@ -21,8 +21,10 @@ public class ModTemplate extends Mod{
      * y simplemente desaparece de la lista tras reiniciar, sin crash ni aviso en pantalla.
      */
     private RenderCuller culler;
-    private FloatWindow win;
     private PerfTuner tuner;
+    private PhysicsThrottle physics;
+    private boolean redraw = true;
+    private int redrawPoll;
     private boolean failed;
 
     public ModTemplate(){
@@ -43,16 +45,19 @@ public class ModTemplate extends Mod{
                     tuner = null;
                     Log.err("[MO] no se pudo iniciar PerfTuner", t);
                 }
-                // La ventana va primero: RenderCuller la usa para recortar. Si falla, el mod sigue sin ella.
                 try{
-                    win = new FloatWindow();
-                    win.install();
+                    physics = new PhysicsThrottle();
+                    physics.install();
                 }catch(Throwable t){
-                    win = null;
-                    Log.err("[MO] no se pudo iniciar FloatWindow", t);
+                    physics = null;
+                    Log.err("[MO] no se pudo iniciar PhysicsThrottle", t);
+                }
+                // Limpieza de ajustes de la ventana flotante eliminada.
+                for(String k : new String[]{"mo-win", "mo-win-pin", "mo-win-x", "mo-win-y", "mo-win-w", "mo-win-h", "mo-win-chrome", "mo-win-min"}){
+                    Core.settings.remove(k);
                 }
                 try{
-                    culler = new RenderCuller(win);
+                    culler = new RenderCuller();
                     Log.info("[MO] v3 cargado. build=" + Version.build);
                 }catch(Throwable t){
                     failed = true;
@@ -67,6 +72,8 @@ public class ModTemplate extends Mod{
 
             Events.run(Trigger.draw, () -> {
                 if(failed || culler == null || !Vars.state.isGame()) return;
+                if((redrawPoll++ & 15) == 0) redraw = Core.settings.getBool("mo-redraw", true);
+                if(!redraw) return;
                 try{
                     Groups.draw.draw(d -> {
                         if(d instanceof Unit){
@@ -107,8 +114,9 @@ public class ModTemplate extends Mod{
         t("mo-unit-solid", "LOD sólido unidades (px)", "Unidades < N px: rect de color de equipo. 0 = off.");
         t("mo-sleep", "Sleep de fábricas fuera de vista", "Fábricas (taladros, crafters) fuera de cámara se duermen. Producción conservada con catch-up.");
         t("mo-sleep-hz", "Tickrate fuera de vista (hz)", "Hz efectivos de las fábricas dormidas. 10 = 1 tick cada 6 ticks reales.");
-        t("mo-win", "Ventana flotante de render", "Renderiza solo dentro de una ventana que puedes mover, redimensionar y fijar. Sin estirar la imagen.");
-        t("mo-win-chrome", "Mostrar borde y controles de la ventana", "Apagado = sin borde ni botones (ventana bloqueada). Para volver a verlos: mantén pulsada 0.7 s la esquina superior izquierda de la ventana, o actívalo aquí.");
+        t("mo-phys-budget", "Simplificar colisiones entre unidades (ms)", "Presupuesto de CPU por frame para el empuje entre unidades. Si se pasa, la física corre 1 de cada k frames (k adaptativo). 0 = desactivado. En multitudes las unidades se solapan algo más.");
+        t("mo-phys-max", "Máximo de frames entre cálculos de empuje", "Tope de k. Más alto ahorra más CPU y solapa más.");
+        t("mo-redraw", "Redibujar entidades (LOD de unidades) [experimental]", "El mod dibuja las entidades por segunda vez para aplicar LOD. Apágalo para probar: si las unidades siguen visibles y baja el CPU, era un dibujado duplicado.");
         t("mo-tick-hz", "Tickrate local de la simulación", "Solo partidas locales. 60 = normal. Más bajo ahorra CPU pero la simulación se ve a saltos y balas/unidades pueden atravesar cosas. Se redondea a frames enteros.");
         t("mo-vsync-off", "Desactivar VSync", "Apaga la sincronización con la pantalla. El contador de FPS puede superar la tasa de refresco; la pantalla solo muestra hasta su tasa. Más calor y batería si no pones límite.");
         t("mo-fps-cap", "Límite de FPS", "Pausa estable entre frames. 0 = sin límite.");
@@ -127,11 +135,9 @@ public class ModTemplate extends Mod{
             t.sliderPref("mo-unit-solid", 5, 0, 30, 1, i -> i <= 0 ? "off" : i + " px");
             t.checkPref("mo-sleep", true);
             t.sliderPref("mo-sleep-hz", 10, 1, 60, 1, i -> i >= 60 ? "sync (60 hz)" : i + " hz");
-            t.checkPref("mo-win", false);
-            t.checkPref("mo-win-chrome", true);
-            t.row();
-            t.button("Restablecer ventana", () -> { if(win != null) win.reset(); }).size(260f, 50f).pad(6f);
-            t.row();
+            t.sliderPref("mo-phys-budget", 2, 0, 10, 1, i -> i <= 0 ? "off" : i + " ms");
+            t.sliderPref("mo-phys-max", 4, 1, 8, 1, i -> "1 de cada " + i);
+            t.checkPref("mo-redraw", true);
             t.sliderPref("mo-tick-hz", 60, 1, 60, 1, i -> i >= 60 ? "normal (60 hz)" : i + " hz");
             t.checkPref("mo-vsync-off", false);
             t.sliderPref("mo-fps-cap", 0, 0, 360, 5, i -> i <= 0 ? "sin límite" : i + " fps");
