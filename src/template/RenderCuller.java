@@ -41,6 +41,8 @@ public class RenderCuller{
     public static final String K_SLEEP = "mo-sleep";
     public static final String K_SLEEP_HZ = "mo-sleep-hz";
     public static final String K_STATS = "mo-stats";
+    public static final String K_PAR = "mo-par";
+    public static final String K_THREADS = "mo-threads";
 
     private static final int MAX_GRID = 0x200000;
     private static final int POLL_MASK = 15;
@@ -108,6 +110,8 @@ public class RenderCuller{
         uIconPx = Core.settings.getInt(K_UICON, 12);
         uSolidPx = Core.settings.getInt(K_USOLID, 5);
         statsOn = Core.settings.getBool(K_STATS, true);
+        parallel = Core.settings.getBool(K_PAR, true);
+        Cores.get().configure(Core.settings.getInt(K_THREADS, 0));
 
         boolean newSleep = Core.settings.getBool(K_SLEEP, true) && !Vars.net.client();
         if(!newSleep && sleepOn){
@@ -206,53 +210,63 @@ public class RenderCuller{
             scratch.clear();
             solidTiles.clear();
             solidColors.clear();
-            int fog = 0, icon = 0;
+            int fog = 0, icon = 0, outWin = 0;
             boolean winOn = win != null && win.clipping();
+            if(winOn) win.prepareWorldRect(); // deja el rect en caché antes de leerlo desde varios hilos
 
-            for(int i = 0; i < src.size; i++){
-                Tile tile = src.items[i];
-                Block block = tile.block();
-                Building build = tile.build;
-
-                if(winOn && !win.worldVisible(tile.drawx(), tile.drawy(), block.size * 4f + 8f)){
-                    sWin++;
-                    continue;
-                }
-
-                if(block == Blocks.air){
-                    scratch.add(tile);
-                    continue;
-                }
-
-                if(fogOn && build != null && build.inFogTo(pteam)){
-                    fog++;
-                    continue;
-                }
-
-                if((doSolid || doIcon) && blockEligible(block) && (build == null || build.wasVisible)){
-                    if(doSolid){
-                        Color c = Tmp.c1.set(block.mapColor);
-                        if(build != null && build.team != pteam){
-                            c.lerp(build.team.color, 0.45f);
-                        }
-                        c.a = 1f;
-                        solidTiles.add(tile);
-                        solidColors.add(c.rgba());
-                        continue;
-                    }
-
-                    float scl = Draw.scl * block.size;
-                    float w = block.fullIcon.width * scl;
-                    float h = block.fullIcon.height * scl;
-                    Draw.z(30f);
-                    Draw.rect(block.fullIcon, tile.drawx(), tile.drawy(), w, h, build != null ? build.drawrot() : 0f);
-                    Draw.reset();
-                    icon++;
-                    continue;
-                }
-
-                scratch.add(tile);
+            // ---- Fase 1: clasificar (solo lectura; se reparte entre núcleos si hay suficientes tiles) ----
+            final int n = src.size;
+            if(act.length < n){
+                act = new byte[n + 1024];
+                col = new int[n + 1024];
             }
+            cTeam = pteam;
+            cFogOn = fogOn;
+            cSolid = doSolid;
+            cIcon = doIcon;
+            cWin = winOn;
+            final Tile[] items = src.items;
+
+            boolean ran = false;
+            if(parallel && !parFailed && n >= PAR_MIN_TILES){
+                try{
+                    ran = Cores.get().parallelFor(n, PAR_CHUNK, (from, to) -> classify(items, from, to));
+                    if(ran) sPar++;
+                }catch(Throwable th){
+                    parFailed = true;
+                    Log.err("[MO] clasificación paralela falló; se usa un solo hilo", th);
+                    ran = false;
+                }
+            }
+            if(!ran) classify(items, 0, n);
+
+            // ---- Fase 2: emitir (hilo principal; GL y listas compartidas) ----
+            for(int i = 0; i < n; i++){
+                Tile tile = items[i];
+                switch(act[i]){
+                    case A_KEEP -> scratch.add(tile);
+                    case A_WIN -> outWin++;
+                    case A_FOG -> fog++;
+                    case A_SOLID -> {
+                        solidTiles.add(tile);
+                        solidColors.add(col[i]);
+                    }
+                    case A_ICON -> {
+                        Block block = tile.block();
+                        Building build = tile.build;
+                        float scl = Draw.scl * block.size;
+                        float w = block.fullIcon.width * scl;
+                        float h = block.fullIcon.height * scl;
+                        Draw.z(30f);
+                        Draw.rect(block.fullIcon, tile.drawx(), tile.drawy(), w, h, build != null ? build.drawrot() : 0f);
+                        Draw.reset();
+                        icon++;
+                    }
+                    default -> {
+                    }
+                }
+            }
+            sWin += outWin;
 
             int quads = solidTiles.size > 0 ? emitSolid() : 0;
 
@@ -275,6 +289,57 @@ public class RenderCuller{
         nanos += Time.nanos() - t0;
         if(++frames >= 600){
             flushStats();
+        }
+    }
+
+    private static final byte A_KEEP = 0, A_WIN = 1, A_FOG = 2, A_SOLID = 3, A_ICON = 4;
+    private static final int PAR_MIN_TILES = 3000, PAR_CHUNK = 1500;
+
+    // Parámetros de la clasificación del frame actual (se escriben en el hilo principal antes de repartir).
+    private byte[] act = new byte[0];
+    private int[] col = new int[0];
+    private Team cTeam;
+    private boolean cFogOn, cSolid, cIcon, cWin;
+    private boolean parallel = true, parFailed;
+    private int sPar;
+
+    /** Decide qué hacer con cada tile en [from, to). Solo lee el mundo; no usa estado compartido mutable. */
+    private void classify(Tile[] items, int from, int to){
+        final Color c = new Color(); // uno por trozo: Tmp.c1 no es seguro entre hilos
+        final Team pteam = cTeam;
+
+        for(int i = from; i < to; i++){
+            Tile tile = items[i];
+            Block block = tile.block();
+            Building build = tile.build;
+
+            if(cWin && !win.worldVisible(tile.drawx(), tile.drawy(), block.size * 4f + 8f)){
+                act[i] = A_WIN;
+                continue;
+            }
+            if(block == Blocks.air){
+                act[i] = A_KEEP;
+                continue;
+            }
+            if(cFogOn && build != null && build.inFogTo(pteam)){
+                act[i] = A_FOG;
+                continue;
+            }
+            if((cSolid || cIcon) && blockEligible(block) && (build == null || build.wasVisible)){
+                if(cSolid){
+                    c.set(block.mapColor);
+                    if(build != null && build.team != pteam){
+                        c.lerp(build.team.color, 0.45f);
+                    }
+                    c.a = 1f;
+                    col[i] = c.rgba();
+                    act[i] = A_SOLID;
+                }else{
+                    act[i] = A_ICON;
+                }
+                continue;
+            }
+            act[i] = A_KEEP;
         }
     }
 
@@ -559,12 +624,13 @@ public class RenderCuller{
     private void flushStats(){
         if(statsOn && frames > 0){
             Log.info(String.format(
-                "[MO] bloques/f: total=%d fuera-ventana=%d fog=%d icon=%d solid=%d->%dq kept=%d | unidades: icon=%d solid=%d | sleep=%d | MO %.3fms | mundo %.2fms",
+                "[MO] bloques/f: total=%d fuera-ventana=%d fog=%d icon=%d solid=%d->%dq kept=%d | unidades: icon=%d solid=%d | sleep=%d | par=%d/%d | MO %.3fms | mundo %.2fms",
                 sIn / frames, sWin / frames, sFog / frames, sIcon / frames, sSolidT / frames, sSolidQ / frames, sKept / frames,
-                sUI / frames, sUS / frames, sleepMap.size,
+                sUI / frames, sUS / frames, sleepMap.size, sPar, frames,
                 nanos / (double)frames / 1e6, wNanos / (double)frames / 1e6));
         }
         frames = 0;
+        sPar = 0;
         sWin = sUS = sUI = sKept = sSolidQ = sSolidT = sIcon = sFog = sIn = 0;
         wNanos = nanos = 0L;
     }

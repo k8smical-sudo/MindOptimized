@@ -21,6 +21,7 @@ import arc.scene.style.Drawable;
 import arc.scene.ui.layout.Scl;
 import arc.struct.Seq;
 import arc.util.Log;
+import arc.util.Time;
 import mindustry.Vars;
 import mindustry.game.EventType.Trigger;
 import mindustry.gen.Icon;
@@ -45,12 +46,26 @@ public class FloatWindow{
     public static final String K_Y = "mo-win-y";
     public static final String K_W = "mo-win-w";
     public static final String K_H = "mo-win-h";
+    public static final String K_CHROME = "mo-win-chrome";
+    public static final String K_MIN = "mo-win-min";
+
+    // Medidas en dp (se pasan por Scl.scl)
+    private static final float MIN_W = 220f, MIN_H = 160f;
+    private static final float BAND = 18f;    // grosor de borde que reacciona a gestos de escala
+    private static final float CORNER = 30f;  // lado de la zona de esquina
+    private static final float TITLE = 40f;   // alto de la barra de título / de los botones
+    private static final float CHIP_W = 96f;  // tamaño de la ficha cuando está minimizada
+    private static final long REVEAL_MS = 700L;
+
+    // zonas: máscara de bordes (1|2|4|8) o acciones (>= 16)
+    private static final int E_L = 1, E_R = 2, E_B = 4, E_T = 8;
+    private static final int Z_NONE = 0, Z_MOVE = 16, Z_PIN = 100, Z_MINIMIZE = 101, Z_HIDE = 102, Z_REVEAL = 103, Z_CHIP = 104;
 
     private static final int MAX_POINTERS = 10;
 
     /** Posición/tamaño como fracción de la pantalla (origen abajo-izquierda). */
     private float fx = 0.10f, fy = 0.22f, fw = 0.80f, fh = 0.50f;
-    private boolean enabled, pinned, dragging;
+    private boolean enabled, pinned, dragging, chrome = true, minimized;
 
     /** Rect en píxeles (y hacia arriba), recalculado por layout(). */
     private int rx, ry, rw, rh;
@@ -186,8 +201,8 @@ public class FloatWindow{
         int sw = Math.max(1, Core.graphics.getWidth());
         int sh = Math.max(1, Core.graphics.getHeight());
 
-        float minW = Math.min(1f, Scl.scl(140f) / sw);
-        float minH = Math.min(1f, Scl.scl(140f) / sh);
+        float minW = Math.min(1f, Scl.scl(MIN_W) / sw);
+        float minH = Math.min(1f, Scl.scl(MIN_H) / sh);
 
         fw = Mathf.clamp(fw, minW, 1f);
         fh = Mathf.clamp(fh, minH, 1f);
@@ -214,13 +229,14 @@ public class FloatWindow{
         clipping = false;
         if(!active()) return;
         layout();
-        if(rw >= Core.graphics.getWidth() && rh >= Core.graphics.getHeight()) return; // pantalla completa: nada que recortar
+        if(!minimized && rw >= Core.graphics.getWidth() && rh >= Core.graphics.getHeight()) return; // pantalla completa: nada que recortar
 
         Draw.flush();
         Gl.clearColor(0f, 0f, 0f, 1f);
         Gl.clear(Gl.colorBufferBit);
         Gl.enable(Gl.scissorTest);
-        Gl.scissor(rx, ry, rw, rh);
+        if(minimized) Gl.scissor(0, 0, 0, 0); // minimizada: no se pinta nada del mundo
+        else Gl.scissor(rx, ry, rw, rh);
         clipping = true;
     }
 
@@ -230,6 +246,11 @@ public class FloatWindow{
         clipping = false;
         Draw.flush();
         Gl.disable(Gl.scissorTest);
+    }
+
+    /** Calcula el rect de la ventana en coordenadas de mundo (llamar desde el hilo principal antes de usar worldVisible en paralelo). */
+    public void prepareWorldRect(){
+        ensureWorldRect();
     }
 
     private void ensureWorldRect(){
@@ -248,17 +269,21 @@ public class FloatWindow{
     /** @return true si el punto (mundo) cae dentro de la ventana, con margen pad. Sin recorte activo siempre es true. */
     public boolean worldVisible(float x, float y, float pad){
         if(!clipping) return true;
+        if(minimized) return false;
         ensureWorldRect();
         return x >= wx0 - pad && x <= wx1 + pad && y >= wy0 - pad && y <= wy1 + pad;
     }
 
     private boolean contains(float sx, float sy){
+        if(minimized) return false;
         return sx >= rx && sx < rx + rw && sy >= ry && sy < ry + rh;
     }
 
     private void readSettings(){
         enabled = Core.settings.getBool(K_ON, false);
         pinned = Core.settings.getBool(K_PIN, false);
+        chrome = Core.settings.getBool(K_CHROME, true);
+        minimized = Core.settings.getBool(K_MIN, false);
         if(!dragging){
             fx = Core.settings.getInt(K_X, Math.round(fx * 1000f)) / 1000f;
             fy = Core.settings.getInt(K_Y, Math.round(fy * 1000f)) / 1000f;
@@ -279,6 +304,12 @@ public class FloatWindow{
         fy = 0.22f;
         fw = 0.80f;
         fh = 0.50f;
+        pinned = false;
+        chrome = true;
+        minimized = false;
+        Core.settings.put(K_PIN, false);
+        Core.settings.put(K_CHROME, true);
+        Core.settings.put(K_MIN, false);
         save();
         layout();
     }
@@ -291,10 +322,7 @@ public class FloatWindow{
         readSettings();
         layout();
 
-        Core.scene.add(new Frame()); // Scene2D: se dibuja encima del HUD
-        Core.scene.add(new Handle(0));
-        Core.scene.add(new Handle(1));
-        Core.scene.add(new Handle(2));
+        Core.scene.add(new Chrome()); // Scene2D: borde, barra de título y botones
 
         Events.run(Trigger.update, this::onUpdate);
         ensureInput();
@@ -356,105 +384,179 @@ public class FloatWindow{
 
     // ------------------------------------------------------------------ interfaz
 
-    /** Borde de la ventana (no recibe toques). */
-    private class Frame extends Element{
-        Frame(){
-            touchable = Touchable.disabled;
-        }
-
-        @Override
-        public void act(float delta){
-            super.act(delta);
-            visible = active();
-        }
-
-        @Override
-        public void draw(){
-            if(!active()) return;
-            Lines.stroke(Scl.scl(2f));
-            Draw.color(pinned ? Color.gray : Color.white, 0.75f);
-            Lines.rect(rx, ry, rw, rh);
-            Draw.reset();
-        }
+    private float px(float dp){
+        return Scl.scl(dp);
     }
 
-    /** kind: 0 = fijar, 1 = mover, 2 = redimensionar (esquina inferior derecha). */
-    private class Handle extends Element{
-        final int kind;
-        float startX, startY, sfx, sfy, sfw, sfh;
+    private static void box(float x, float y, float w, float h){
+        Fill.rect(x + w / 2f, y + h / 2f, w, h);
+    }
 
-        Handle(int kind){
-            this.kind = kind;
+    /**
+     * Borde, barra de título y botones, en un solo elemento. Solo "existe" para toques en las zonas que usa
+     * (borde, barra, ficha o la esquina de revelado); el resto de la ventana pasa los toques al juego.
+     */
+    private class Chrome extends Element{
+        int zone = Z_NONE, capturing = -1;
+        float startX, startY, sfx, sfy, sfw, sfh;
+        boolean revealing;
+        long revealStart;
+
+        Chrome(){
             touchable = Touchable.enabled;
 
-            if(kind == 0){
-                clicked(() -> {
-                    pinned = !pinned;
-                    Core.settings.put(K_PIN, pinned);
-                });
-            }else{
-                addListener(new InputListener(){
-                    @Override
-                    public boolean touchDown(InputEvent event, float x, float y, int pointer, KeyCode button){
-                        if(pinned) return false;
-                        startX = event.stageX;
-                        startY = event.stageY;
-                        sfx = fx;
-                        sfy = fy;
-                        sfw = fw;
-                        sfh = fh;
-                        dragging = true;
-                        return true;
+            addListener(new InputListener(){
+                @Override
+                public boolean touchDown(InputEvent event, float x, float y, int pointer, KeyCode button){
+                    if(capturing >= 0) return false;
+                    int z = zoneAt(x, y);
+                    if(z == Z_NONE) return false;
+
+                    zone = z;
+                    capturing = pointer;
+                    startX = event.stageX;
+                    startY = event.stageY;
+                    sfx = fx;
+                    sfy = fy;
+                    sfw = fw;
+                    sfh = fh;
+
+                    if(z == Z_REVEAL){
+                        revealing = true;
+                        revealStart = Time.millis();
+                    }
+                    dragging = !pinned && (z == Z_MOVE || (z > 0 && z < Z_MOVE));
+                    return true;
+                }
+
+                @Override
+                public void touchDragged(InputEvent event, float x, float y, int pointer){
+                    if(pointer != capturing || !dragging) return;
+
+                    int sw = Math.max(1, Core.graphics.getWidth());
+                    int sh = Math.max(1, Core.graphics.getHeight());
+                    float dx = (event.stageX - startX) / sw;
+                    float dy = (event.stageY - startY) / sh;
+                    float minW = Math.min(1f, Scl.scl(MIN_W) / sw);
+                    float minH = Math.min(1f, Scl.scl(MIN_H) / sh);
+
+                    if(zone == Z_MOVE){
+                        fx = Mathf.clamp(sfx + dx, 0f, 1f - sfw);
+                        fy = Mathf.clamp(sfy + dy, 0f, 1f - sfh);
+                        return;
                     }
 
-                    @Override
-                    public void touchDragged(InputEvent event, float x, float y, int pointer){
-                        if(!dragging) return;
-                        int sw = Math.max(1, Core.graphics.getWidth());
-                        int sh = Math.max(1, Core.graphics.getHeight());
-                        float dx = (event.stageX - startX) / sw;
-                        float dy = (event.stageY - startY) / sh;
+                    // Escala tipo ventana: cada borde/esquina mueve solo su(s) lado(s); el opuesto queda fijo.
+                    float l = sfx, r = sfx + sfw, b = sfy, t = sfy + sfh;
+                    if((zone & E_L) != 0) l = Mathf.clamp(sfx + dx, 0f, r - minW);
+                    if((zone & E_R) != 0) r = Mathf.clamp(r + dx, l + minW, 1f);
+                    if((zone & E_B) != 0) b = Mathf.clamp(sfy + dy, 0f, t - minH);
+                    if((zone & E_T) != 0) t = Mathf.clamp(t + dy, b + minH, 1f);
+                    fx = l;
+                    fw = r - l;
+                    fy = b;
+                    fh = t - b;
+                }
 
-                        if(Handle.this.kind == 1){
-                            fx = Mathf.clamp(sfx + dx, 0f, 1f - sfw);
-                            fy = Mathf.clamp(sfy + dy, 0f, 1f - sfh);
-                        }else{
-                            float minW = Math.min(1f, Scl.scl(140f) / sw);
-                            float minH = Math.min(1f, Scl.scl(140f) / sh);
-                            // esquina inferior derecha: izquierda y borde superior fijos
-                            float right = Mathf.clamp(sfx + sfw + dx, sfx + minW, 1f);
-                            float bottom = Mathf.clamp(sfy + dy, 0f, sfy + sfh - minH);
-                            fx = sfx;
-                            fw = right - sfx;
-                            fy = bottom;
-                            fh = sfy + sfh - bottom;
-                        }
-                    }
+                @Override
+                public void touchUp(InputEvent event, float x, float y, int pointer, KeyCode button){
+                    if(pointer != capturing) return;
+                    capturing = -1;
+                    revealing = false;
 
-                    @Override
-                    public void touchUp(InputEvent event, float x, float y, int pointer, KeyCode button){
-                        if(!dragging) return;
+                    if(dragging){
                         dragging = false;
                         save();
+                    }else if(zone >= Z_PIN && zone != Z_REVEAL && zoneAt(x, y) == zone){
+                        // botón: se activa al soltar dentro del mismo botón
+                        switch(zone){
+                            case Z_PIN -> {
+                                pinned = !pinned;
+                                Core.settings.put(K_PIN, pinned);
+                            }
+                            case Z_MINIMIZE -> {
+                                minimized = true;
+                                Core.settings.put(K_MIN, true);
+                            }
+                            case Z_HIDE -> {
+                                chrome = false;
+                                Core.settings.put(K_CHROME, false);
+                            }
+                            case Z_CHIP -> {
+                                minimized = false;
+                                Core.settings.put(K_MIN, false);
+                            }
+                            default -> {
+                            }
+                        }
                     }
-                });
+                    zone = Z_NONE;
+                }
+            });
+        }
+
+        /** Solo captura toques en las zonas útiles; si no, el toque sigue hacia el juego. */
+        @Override
+        public Element hit(float x, float y, boolean touchable){
+            if(!visible) return null;
+            if(x < 0 || y < 0 || x >= width || y >= height) return null;
+            return zoneAt(x, y) == Z_NONE ? null : this;
+        }
+
+        /** x, y en coordenadas locales (origen abajo-izquierda del elemento). */
+        int zoneAt(float lx, float ly){
+            if(minimized) return Z_CHIP;
+
+            float c = px(CORNER);
+            if(!chrome){
+                return (lx < c && ly > height - c) ? Z_REVEAL : Z_NONE;
             }
+
+            float bw = px(BAND), th = px(TITLE);
+
+            // esquinas
+            boolean nl = lx < c, nr = lx > width - c, nb = ly < c, nt = ly > height - c;
+            if((nl || nr) && (nb || nt)){
+                return (nl ? E_L : E_R) | (nb ? E_B : E_T);
+            }
+
+            // bordes
+            int m = 0;
+            if(lx < bw) m |= E_L;
+            if(lx > width - bw) m |= E_R;
+            if(ly < bw) m |= E_B;
+            if(ly > height - bw) m |= E_T;
+            if(m != 0) return m;
+
+            // barra de título
+            if(ly > height - bw - th){
+                float sx = width - c - th * 3f;
+                if(lx >= sx && lx < sx + th * 3f){
+                    return Z_PIN + Math.min(2, (int)((lx - sx) / th));
+                }
+                return Z_MOVE;
+            }
+            return Z_NONE;
         }
 
         @Override
         public void act(float delta){
             super.act(delta);
 
-            boolean show = active() && (kind == 0 || !pinned);
-            visible = show;
-            if(!show) return;
+            visible = active();
+            if(!visible) return;
 
-            float s = Scl.scl(38f);
-            float pad = Scl.scl(6f);
-            switch(kind){
-                case 0 -> setBounds(rx + pad, ry + rh - s - pad, s, s);
-                case 1 -> setBounds(rx + pad * 2f + s, ry + rh - s - pad, s, s);
-                default -> setBounds(rx + rw - s - pad, ry + pad, s, s);
+            if(minimized){
+                float w = px(CHIP_W), h = px(TITLE);
+                setBounds(rx, ry + rh - h, w, h);
+            }else{
+                setBounds(rx, ry, rw, rh);
+            }
+
+            if(revealing && Time.millis() - revealStart >= REVEAL_MS){
+                revealing = false;
+                chrome = true;
+                Core.settings.put(K_CHROME, true);
             }
         }
 
@@ -462,13 +564,77 @@ public class FloatWindow{
         public void draw(){
             if(!visible) return;
 
-            Draw.color(0f, 0f, 0f, 0.6f);
-            Fill.rect(x + width / 2f, y + height / 2f, width, height);
+            if(minimized){
+                drawChip();
+                return;
+            }
+            if(!chrome) return;
 
-            Drawable icon = kind == 0 ? (pinned ? Icon.lock : Icon.lockOpen) : kind == 1 ? Icon.move : Icon.resize;
-            float p = Scl.scl(6f);
+            float bw = px(BAND), th = px(TITLE), c = px(CORNER);
+            Color base = pinned ? Color.gray : Color.white;
+
+            // banda de borde (zona de gestos de escala)
+            Draw.color(base, 0.16f);
+            box(x, y, width, bw);
+            box(x, y + height - bw, width, bw);
+            box(x, y + bw, bw, height - bw * 2f);
+            box(x + width - bw, y + bw, bw, height - bw * 2f);
+
+            // línea exterior
+            Lines.stroke(px(2f));
+            Draw.color(base, 0.8f);
+            Lines.rect(x, y, width, height);
+
+            // marcas de esquina
+            float k = px(10f);
+            Draw.color(base, 0.9f);
+            box(x, y, k, k);
+            box(x + width - k, y, k, k);
+            box(x, y + height - k, k, k);
+            box(x + width - k, y + height - k, k, k);
+
+            // barra de título
+            float ty = y + height - bw - th;
+            Draw.color(0f, 0f, 0f, 0.6f);
+            box(x + bw, ty, width - bw * 2f, th);
+
+            // asa de arrastre (tres rayas)
+            float gx = x + (width - c - th * 3f) / 2f + bw / 2f;
+            Draw.color(base, 0.8f);
+            for(int i = -1; i <= 1; i++){
+                box(gx - px(18f), ty + th / 2f + i * px(6f) - px(1.5f), px(36f), px(3f));
+            }
+
+            // botones: fijar, minimizar, ocultar controles
+            float sx = x + width - c - th * 3f;
             Draw.color(1f, 1f, 1f, 0.95f);
-            icon.draw(x + p, y + p, width - p * 2f, height - p * 2f);
+            Drawable lock = pinned ? Icon.lock : Icon.lockOpen;
+            float p = px(8f);
+            lock.draw(sx + p, ty + p, th - p * 2f, th - p * 2f);
+
+            float cx = sx + th * 1.5f, cy = ty + th / 2f;
+            box(cx - px(9f), cy - px(7f), px(18f), px(3f)); // "_"
+
+            cx = sx + th * 2.5f;
+            Lines.stroke(px(2.5f));
+            Lines.circle(cx, cy, px(9f)); // "prohibido": ocultar
+            Lines.line(cx - px(6.4f), cy - px(6.4f), cx + px(6.4f), cy + px(6.4f));
+
+            Draw.reset();
+        }
+
+        private void drawChip(){
+            Draw.color(0f, 0f, 0f, 0.65f);
+            box(x, y, width, height);
+            Lines.stroke(px(2f));
+            Draw.color(1f, 1f, 1f, 0.85f);
+            Lines.rect(x, y, width, height);
+
+            // símbolo de "restaurar": cuadrado con barra superior
+            float cx = x + width / 2f, cy = y + height / 2f;
+            Lines.stroke(px(2.5f));
+            Lines.rect(cx - px(9f), cy - px(9f), px(18f), px(18f));
+            box(cx - px(9f), cy + px(5f), px(18f), px(4f));
             Draw.reset();
         }
     }
