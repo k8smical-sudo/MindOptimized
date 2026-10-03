@@ -2,13 +2,10 @@ package template;
 
 import arc.Core;
 import arc.Events;
-import arc.graphics.Blending;
 import arc.graphics.Color;
-import arc.graphics.Gl;
 import arc.graphics.g2d.Draw;
 import arc.graphics.g2d.Fill;
 import arc.graphics.g2d.TextureRegion;
-import arc.graphics.gl.FrameBuffer;
 import arc.struct.IntMap;
 import arc.struct.IntSeq;
 import arc.struct.Seq;
@@ -23,7 +20,6 @@ import mindustry.game.Team;
 import mindustry.gen.Building;
 import mindustry.gen.Groups;
 import mindustry.gen.Unit;
-import mindustry.graphics.Shaders;
 import mindustry.world.Block;
 import mindustry.world.Tile;
 import mindustry.world.blocks.ConstructBlock;
@@ -44,9 +40,6 @@ public class RenderCuller{
     public static final String K_USOLID = "mo-unit-solid";
     public static final String K_SLEEP = "mo-sleep";
     public static final String K_SLEEP_HZ = "mo-sleep-hz";
-    public static final String K_SCISSOR = "mo-scissor";
-    public static final String K_SCIS_W = "mo-scissor-w";
-    public static final String K_SCIS_H = "mo-scissor-h";
     public static final String K_STATS = "mo-stats";
 
     private static final int MAX_GRID = 0x200000;
@@ -64,11 +57,8 @@ public class RenderCuller{
     private final IntSeq solidColors = new IntSeq();
     private int[] grid = new int[0];
 
-    /** Se crea de forma perezosa en el hilo de render (nunca en el constructor ni en el init estático). */
-    private FrameBuffer scissorFB;
-    private boolean scissorFBFailed;
-    private float savedCamW, savedCamH;
-    private boolean scissorFBActive;
+    /** Ventana flotante: recorta el render por GL (sin FrameBuffer, sin estirar) y descarta lo que queda fuera. */
+    private final FloatWindow win;
 
     private static final Class<?>[] CRAFTER_TYPES = initCrafterTypes();
     private final IntMap<SleepEntry> sleepMap = new IntMap<>();
@@ -76,11 +66,11 @@ public class RenderCuller{
     private int scanCursor, sleepTick, sleepPeriod = 6;
     private boolean sleepOn;
 
-    private boolean on, cullFog, merge, scissorOn, statsOn;
-    private int iconPx, solidPx, uIconPx, uSolidPx, scissorW, scissorH;
+    private boolean on, cullFog, merge, statsOn;
+    private int iconPx, solidPx, uIconPx, uSolidPx;
     private int poll;
 
-    private int sIn, sFog, sIcon, sSolidT, sSolidQ, sKept, sUI, sUS, frames;
+    private int sWin, sIn, sFog, sIcon, sSolidT, sSolidQ, sKept, sUI, sUS, frames;
     private long nanos, wNanos, wStart;
 
     private static Class<?>[] initCrafterTypes(){
@@ -100,7 +90,8 @@ public class RenderCuller{
         return list.toArray(new Class<?>[0]);
     }
 
-    public RenderCuller(){
+    public RenderCuller(FloatWindow win){
+        this.win = win;
         Events.run(Trigger.preDraw, this::onPreDraw);
         Events.run(Trigger.drawOver, this::applyBlockCull);
         Events.run(Trigger.postDraw, this::onPostDraw);
@@ -116,9 +107,6 @@ public class RenderCuller{
         merge = Core.settings.getBool(K_MERGE, true);
         uIconPx = Core.settings.getInt(K_UICON, 12);
         uSolidPx = Core.settings.getInt(K_USOLID, 5);
-        scissorOn = Core.settings.getBool(K_SCISSOR, false);
-        scissorW = Math.max(20, Math.min(100, Core.settings.getInt(K_SCIS_W, 100)));
-        scissorH = Math.max(20, Math.min(100, Core.settings.getInt(K_SCIS_H, 100)));
         statsOn = Core.settings.getBool(K_STATS, true);
 
         boolean newSleep = Core.settings.getBool(K_SLEEP, true) && !Vars.net.client();
@@ -182,17 +170,13 @@ public class RenderCuller{
     private void onPreDraw(){
         restoreView();
         wStart = Time.nanos();
-        if(scissorOn && Vars.state.isGame()){
-            beginScissor();
-        }
+        if(win != null) win.beginClip();
     }
 
     private void onPostDraw(){
         restoreView();
         wNanos += Time.nanos() - wStart;
-        if(scissorOn){
-            endScissor();
-        }
+        if(win != null) win.endClip();
     }
 
     private void onUpdate(){
@@ -223,11 +207,17 @@ public class RenderCuller{
             solidTiles.clear();
             solidColors.clear();
             int fog = 0, icon = 0;
+            boolean winOn = win != null && win.clipping();
 
             for(int i = 0; i < src.size; i++){
                 Tile tile = src.items[i];
                 Block block = tile.block();
                 Building build = tile.build;
+
+                if(winOn && !win.worldVisible(tile.drawx(), tile.drawy(), block.size * 4f + 8f)){
+                    sWin++;
+                    continue;
+                }
 
                 if(block == Blocks.air){
                     scratch.add(tile);
@@ -368,6 +358,10 @@ public class RenderCuller{
     public boolean drawUnit(Unit unit){
         if(!on || unit.dead || unit.inFogTo(Vars.player.team())){
             return unit.inFogTo(Vars.player.team());
+        }
+
+        if(win != null && win.clipping() && !win.worldVisible(unit.x, unit.y, unit.hitSize + 16f)){
+            return true;
         }
 
         float ppt = (float)Core.graphics.getWidth() / Core.camera.width;
@@ -525,53 +519,6 @@ public class RenderCuller{
         sleepTick = 0;
     }
 
-    private void beginScissor(){
-        if(scissorFBFailed) return;
-        if(scissorW >= 100 && scissorH >= 100) return;
-
-        int sw = Core.graphics.getWidth();
-        int sh = Core.graphics.getHeight();
-        int vw = Math.max(2, sw * scissorW / 100);
-        int vh = Math.max(2, sh * scissorH / 100);
-
-        try{
-            if(scissorFB == null){
-                scissorFB = new FrameBuffer(vw, vh);
-            }
-            scissorFB.resize(vw, vh);
-        }catch(Throwable t){
-            scissorFBFailed = true;
-            scissorFBActive = false;
-            Log.err("[MO] no se pudo crear el FrameBuffer del recorte; recorte desactivado: " + t);
-            return;
-        }
-
-        savedCamW = Core.camera.width;
-        savedCamH = Core.camera.height;
-        Core.camera.width = savedCamW * scissorW / 100f;
-        Core.camera.height = savedCamH * scissorH / 100f;
-        Core.camera.update();
-
-        scissorFB.begin(Color.black);
-        scissorFBActive = true;
-    }
-
-    private void endScissor(){
-        if(!scissorFBActive) return;
-        scissorFBActive = false;
-
-        scissorFB.end();
-        Core.camera.width = savedCamW;
-        Core.camera.height = savedCamH;
-        Core.camera.update();
-
-        Gl.clearColor(0f, 0f, 0f, 1f);
-        Gl.clear(Gl.colorBufferBit);
-        Blending.disabled.apply();
-        Draw.blit(scissorFB, Shaders.screenspace);
-        Blending.normal.apply();
-    }
-
     public static int mergeGrid(int[] grid, int w, int h, RectSink sink){
         int quads = 0;
         for(int y = 0; y < h; y++){
@@ -612,13 +559,13 @@ public class RenderCuller{
     private void flushStats(){
         if(statsOn && frames > 0){
             Log.info(String.format(
-                "[MO] bloques/f: total=%d fog=%d icon=%d solid=%d->%dq kept=%d | unidades: icon=%d solid=%d | sleep=%d | MO %.3fms | mundo %.2fms",
-                sIn / frames, sFog / frames, sIcon / frames, sSolidT / frames, sSolidQ / frames, sKept / frames,
+                "[MO] bloques/f: total=%d fuera-ventana=%d fog=%d icon=%d solid=%d->%dq kept=%d | unidades: icon=%d solid=%d | sleep=%d | MO %.3fms | mundo %.2fms",
+                sIn / frames, sWin / frames, sFog / frames, sIcon / frames, sSolidT / frames, sSolidQ / frames, sKept / frames,
                 sUI / frames, sUS / frames, sleepMap.size,
                 nanos / (double)frames / 1e6, wNanos / (double)frames / 1e6));
         }
         frames = 0;
-        sUS = sUI = sKept = sSolidQ = sSolidT = sIcon = sFog = sIn = 0;
+        sWin = sUS = sUI = sKept = sSolidQ = sSolidT = sIcon = sFog = sIn = 0;
         wNanos = nanos = 0L;
     }
 

@@ -3,6 +3,7 @@ package template;
 import arc.Core;
 import arc.Events;
 import arc.graphics.Color;
+import arc.graphics.Gl;
 import arc.graphics.g2d.Draw;
 import arc.graphics.g2d.Fill;
 import arc.graphics.g2d.Lines;
@@ -38,7 +39,7 @@ import mindustry.input.InputHandler;
  *  - Que EMPIEZAN fuera de la ventana: se consumen aquí y solo mueven la cámara (1 dedo) o hacen zoom (2 dedos).
  */
 public class FloatWindow{
-    public static final String K_ON = "mo-scissor";
+    public static final String K_ON = "mo-win";
     public static final String K_PIN = "mo-win-pin";
     public static final String K_X = "mo-win-x";
     public static final String K_Y = "mo-win-y";
@@ -68,7 +69,7 @@ public class FloatWindow{
         public boolean touchDown(int sx, int sy, int pointer, KeyCode button){
             if(pointer < 0 || pointer >= MAX_POINTERS || !active()) return false;
             layout();
-            if(contains(sx, sy)){
+            if(contains(sx, Core.graphics.getHeight() - sy)){
                 outside[pointer] = false;
                 return false; // dentro: el juego lo maneja (construir)
             }
@@ -90,7 +91,7 @@ public class FloatWindow{
             if(pointer < 0 || pointer >= MAX_POINTERS || !outside[pointer]) return false;
 
             float dx = sx - lastX[pointer];
-            float dy = sy - lastY[pointer];
+            float dy = lastY[pointer] - sy; // a Y hacia arriba
             lastX[pointer] = sx;
             lastY[pointer] = sy;
 
@@ -199,6 +200,58 @@ public class FloatWindow{
         ry = Math.max(0, Math.min(sh - rh, Math.round(fy * sh)));
     }
 
+    // ------------------------------------------------------------------ recorte de render
+
+    private boolean clipping;
+    private long rectFrame = -1;
+    private float wx0, wy0, wx1, wy1;
+
+    /** true mientras el mundo se está dibujando recortado a la ventana. */
+    public boolean clipping(){ return clipping; }
+
+    /** Llamar en Trigger.preDraw: deja todo negro y limita el dibujado al rect de la ventana. */
+    public void beginClip(){
+        clipping = false;
+        if(!active()) return;
+        layout();
+        if(rw >= Core.graphics.getWidth() && rh >= Core.graphics.getHeight()) return; // pantalla completa: nada que recortar
+
+        Draw.flush();
+        Gl.clearColor(0f, 0f, 0f, 1f);
+        Gl.clear(Gl.colorBufferBit);
+        Gl.enable(Gl.scissorTest);
+        Gl.scissor(rx, ry, rw, rh);
+        clipping = true;
+    }
+
+    /** Llamar en Trigger.postDraw: el HUD (Scene2D) se dibuja después y debe verse completo. */
+    public void endClip(){
+        if(!clipping) return;
+        clipping = false;
+        Draw.flush();
+        Gl.disable(Gl.scissorTest);
+    }
+
+    private void ensureWorldRect(){
+        long f = Core.graphics.getFrameId();
+        if(f == rectFrame) return;
+        rectFrame = f;
+        float sw = Math.max(1, Core.graphics.getWidth()), sh = Math.max(1, Core.graphics.getHeight());
+        float l = Core.camera.position.x - Core.camera.width / 2f;
+        float b = Core.camera.position.y - Core.camera.height / 2f;
+        wx0 = l + rx / sw * Core.camera.width;
+        wx1 = l + (rx + rw) / sw * Core.camera.width;
+        wy0 = b + ry / sh * Core.camera.height;
+        wy1 = b + (ry + rh) / sh * Core.camera.height;
+    }
+
+    /** @return true si el punto (mundo) cae dentro de la ventana, con margen pad. Sin recorte activo siempre es true. */
+    public boolean worldVisible(float x, float y, float pad){
+        if(!clipping) return true;
+        ensureWorldRect();
+        return x >= wx0 - pad && x <= wx1 + pad && y >= wy0 - pad && y <= wy1 + pad;
+    }
+
     private boolean contains(float sx, float sy){
         return sx >= rx && sx < rx + rw && sy >= ry && sy < ry + rh;
     }
@@ -238,7 +291,7 @@ public class FloatWindow{
         readSettings();
         layout();
 
-        Core.scene.add(new Frame());
+        Core.scene.add(new Frame()); // Scene2D: se dibuja encima del HUD
         Core.scene.add(new Handle(0));
         Core.scene.add(new Handle(1));
         Core.scene.add(new Handle(2));

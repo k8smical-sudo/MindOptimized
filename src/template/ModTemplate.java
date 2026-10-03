@@ -21,14 +21,23 @@ public class ModTemplate extends Mod{
      * y simplemente desaparece de la lista tras reiniciar, sin crash ni aviso en pantalla.
      */
     private RenderCuller culler;
+    private FloatWindow win;
     private boolean failed;
 
     public ModTemplate(){
         // Constructor deliberadamente mínimo: solo registra listeners, no toca GL ni reflexión.
         try{
             Events.on(ClientLoadEvent.class, e -> {
+                // La ventana va primero: RenderCuller la usa para recortar. Si falla, el mod sigue sin ella.
                 try{
-                    culler = new RenderCuller();
+                    win = new FloatWindow();
+                    win.install();
+                }catch(Throwable t){
+                    win = null;
+                    Log.err("[MO] no se pudo iniciar FloatWindow", t);
+                }
+                try{
+                    culler = new RenderCuller(win);
                     Log.info("[MO] v3 cargado. build=" + Version.build);
                 }catch(Throwable t){
                     failed = true;
@@ -83,9 +92,7 @@ public class ModTemplate extends Mod{
         t("mo-unit-solid", "LOD sólido unidades (px)", "Unidades < N px: rect de color de equipo. 0 = off.");
         t("mo-sleep", "Sleep de fábricas fuera de vista", "Fábricas (taladros, crafters) fuera de cámara se duermen. Producción conservada con catch-up.");
         t("mo-sleep-hz", "Tickrate fuera de vista (hz)", "Hz efectivos de las fábricas dormidas. 10 = 1 tick cada 6 ticks reales.");
-        t("mo-scissor", "Recorte de cámara activo", "Solo renderiza el porcentaje de pantalla configurado; el resto es negro.");
-        t("mo-scissor-w", "Recorte: ancho (%)", "Porcentaje del ancho de pantalla que se renderiza.");
-        t("mo-scissor-h", "Recorte: alto (%)", "Porcentaje del alto de pantalla que se renderiza.");
+        t("mo-win", "Ventana flotante de render", "Renderiza solo dentro de una ventana que puedes mover, redimensionar y fijar. Sin estirar la imagen.");
         t("mo-stats", "Estadísticas en el log", "Cada 600 frames imprime métricas de vértices y tiempos.");
 
         Vars.ui.settings.addCategory("MindOptimized", (Drawable)Icon.settings, t -> {
@@ -98,9 +105,10 @@ public class ModTemplate extends Mod{
             t.sliderPref("mo-unit-solid", 5, 0, 30, 1, i -> i <= 0 ? "off" : i + " px");
             t.checkPref("mo-sleep", true);
             t.sliderPref("mo-sleep-hz", 10, 1, 60, 1, i -> i >= 60 ? "sync (60 hz)" : i + " hz");
-            t.checkPref("mo-scissor", false);
-            t.sliderPref("mo-scissor-w", 100, 20, 100, 5, i -> i + "%");
-            t.sliderPref("mo-scissor-h", 100, 20, 100, 5, i -> i + "%");
+            t.checkPref("mo-win", false);
+            t.row();
+            t.button("Restablecer ventana", () -> { if(win != null) win.reset(); }).size(260f, 50f).pad(6f);
+            t.row();
             t.checkPref("mo-stats", true);
         });
     }
