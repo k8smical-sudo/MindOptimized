@@ -3,6 +3,7 @@ package template;
 import arc.*;
 import arc.graphics.*;
 import arc.graphics.g2d.*;
+import arc.graphics.Gl;
 import arc.graphics.gl.*;
 import arc.struct.*;
 import arc.util.*;
@@ -54,12 +55,13 @@ import static mindustry.Vars.*;
  *  – Al volver a vista: noSleep() las despierta normalmente.
  *  – Se escanea un bloque del grupo por frame (< 1 ms de coste JS).
  *
- * ═══ Sistema 4: SCISSOR DE CÁMARA ════════════════════════════════════════
- * glScissor limita el fill-rate a un porcentaje del área de pantalla.
- * La región fuera del recorte queda negra en GPU, ahorrando fill-rate y
- * bandeja sin tocar la cámara ni ningún framebuffer extra.
- * Los elementos de UI de Arc se dibujan fuera del bloque Draw.sort(true)
- * y no se ven afectados por glScissor (se activa solo durante drawWorld).
+ * ═══ Sistema 4: SCISSOR DE CÁMARA (FrameBuffer) ══════════════════════════
+ * El mundo se renderiza en un FB de tamaño reducido (scissorW% × scissorH%).
+ * En postDraw la pantalla se limpia de negro completo y el FB se vuelca
+ * centrado (blit). La UI de Arc corre después de postDraw en su propio
+ * listener y no pasa por el FB → barras negras limpias, sin ojo de araña.
+ * La cámara se reduce proporcionalmente → el zoom y los tiles por pantalla
+ * quedan igual, solo cambia el área de cobertura visible.
  */
 public class RenderCuller{
 
@@ -95,6 +97,11 @@ public class RenderCuller{
     private final Seq<Tile>   solidTiles   = new Seq<>(false, 2048, Tile.class);
     private final IntSeq      solidColors  = new IntSeq();
     private int[] grid = new int[0];
+
+    // ── Scissor con FrameBuffer (ver beginScissor/endScissor) ────────────────
+    private final FrameBuffer scissorFB = new FrameBuffer();
+    private float savedCamW, savedCamH;
+    private boolean scissorFBActive;
 
     // ── Sleep de fábricas ─────────────────────────────────────────────
     @SuppressWarnings({"rawtypes","unchecked"})
@@ -498,24 +505,46 @@ public class RenderCuller{
     private void resetSleep(){ releaseAllSleep(); sleepTick = 0; }
 
     // ════════════════════════════════════════════════════════════════
-    //  SISTEMA 4: SCISSOR DE CÁMARA  (glScissor)
+    //  SISTEMA 4: SCISSOR CON FRAMEBUFFER (patrón idéntico al Pixelator)
     // ════════════════════════════════════════════════════════════════
-    // glScissor se aplica en espacio de framebuffer (píxeles del dispositivo).
-    // Solo afecta al bloque entre beginScissor/endScissor que cubre drawWorld.
-    // La UI de Arc se dibuja en su propio pass después de postDraw → seguro.
+    //  preDraw  → fb.begin(Color.black) + reducir camera.width/height
+    //  drawWorld corre dentro del FB (solo el % configurado)
+    //  postDraw → fb.end() + graphics.clear(black) + fb.blit centrado
+    //  La UI (scene.draw) corre DESPUÉS de postDraw en su propio listener
+    //  y NO está en el FB → barras negras limpias, sin ojo de araña.
 
     private void beginScissor(){
         if(scissorW >= 100 && scissorH >= 100) return;
         int sw = graphics.getWidth(), sh = graphics.getHeight();
-        int vw = sw * scissorW / 100, vh = sh * scissorH / 100;
-        int ox = (sw - vw) / 2,       oy = (sh - vh) / 2;
-        Gl.enable(Gl.scissorTest);
-        Gl.scissor(ox, oy, vw, vh);
+        int vw = Math.max(2, sw * scissorW / 100);
+        int vh = Math.max(2, sh * scissorH / 100);
+        scissorFB.resizeCheck(vw, vh);
+        // Reducir la cámara en proporción para que el mundo se dibuje
+        // en la misma escala pero en menos píxeles.
+        savedCamW = camera.width;
+        savedCamH = camera.height;
+        camera.width  = savedCamW  * scissorW / 100f;
+        camera.height = savedCamH  * scissorH / 100f;
+        camera.update();
+        scissorFB.begin(Color.black);
+        scissorFBActive = true;
     }
 
     private void endScissor(){
-        if(scissorW >= 100 && scissorH >= 100) return;
-        Gl.disable(Gl.scissorTest);
+        if(!scissorFBActive) return;
+        scissorFBActive = false;
+        scissorFB.end();
+        // Restaurar cámara antes de dibujar el blit
+        camera.width  = savedCamW;
+        camera.height = savedCamH;
+        camera.update();
+        // Limpiar la pantalla completa de negro
+        Gl.clearColor(0f, 0f, 0f, 1f);
+        Gl.clear(Gl.colorBufferBit);
+        // Volcar el FB centrado usando screenspace (sin blending para evitar transparencia)
+        Blending.disabled.apply();
+        Draw.blit(scissorFB, Shaders.screenspace);
+        Blending.normal.apply();
     }
 
     // ════════════════════════════════════════════════════════════════
