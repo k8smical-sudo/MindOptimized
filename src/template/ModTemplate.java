@@ -5,41 +5,46 @@ import arc.util.*;
 import mindustry.*;
 import mindustry.core.*;
 import mindustry.game.EventType.*;
+import mindustry.gen.*;
 import mindustry.mod.*;
 
-import java.lang.reflect.*;
-
-/** Fase 0: solo observa. No cambia el render. */
+/** MindOptimized: recorte agresivo de vertices del render dinamico (ver RenderCuller). */
 public class ModTemplate extends Mod{
-    private long drawStart, drawAccum;
-    private int drawFrames;
+    private RenderCuller culler;
 
     public ModTemplate(){
-        // Tiempo entre preDraw y postDraw (mide el dibujo del mundo, no todo el frame)
-        Events.run(Trigger.preDraw, () -> drawStart = Time.nanos());
-        Events.run(Trigger.postDraw, () -> {
-            drawAccum += Time.nanos() - drawStart;
-            if(++drawFrames >= 300){
-                Log.info("[probe] mundo medio: " + (drawAccum / drawFrames / 1_000_000.0) + " ms/frame");
-                drawAccum = 0;
-                drawFrames = 0;
-            }
-        });
+        culler = new RenderCuller();
 
         Events.on(ClientLoadEvent.class, e -> {
-            Log.info("[probe] cargado. Version: build=" + Version.build
-                + " type=" + Version.type + " number=" + Version.number
-                + " revision=" + Version.revision);
-            dump("BlockRenderer", Vars.renderer.blocks.getClass());
-            dump("Renderer", Vars.renderer.getClass());
+            Log.info("[MO] cargado. build=" + Version.build + " type=" + Version.type + " number=" + Version.number);
+            try{
+                buildSettings();
+            }catch(Throwable t){
+                Log.err("[MO] ajustes fallaron: " + t);
+            }
         });
     }
 
-    /** Lista campos y metodos declarados para localizar donde engancharnos. */
-    private void dump(String label, Class<?> c){
-        for(Field f : c.getDeclaredFields())
-            Log.info("[probe] " + label + " campo: " + Modifier.toString(f.getModifiers()) + " " + f.getType().getSimpleName() + " " + f.getName());
-        for(Method m : c.getDeclaredMethods())
-            Log.info("[probe] " + label + " metodo: " + Modifier.toString(m.getModifiers()) + " " + m.getReturnType().getSimpleName() + " " + m.getName() + "(" + m.getParameterCount() + ")");
+    private static void title(String key, String text, String desc){
+        Core.bundle.getProperties().put("setting." + key + ".name", text);
+        if(desc != null) Core.bundle.getProperties().put("setting." + key + ".description", desc);
+    }
+
+    private void buildSettings(){
+        title(RenderCuller.K_ON, "MindOptimized activo", "Interruptor general. Apagado = render 100% vanilla (sirve para comparar ms).");
+        title(RenderCuller.K_FOG, "Ocultar edificios recordados bajo niebla", "No dibuja edificios que viste antes pero ahora estan bajo niebla.");
+        title(RenderCuller.K_ICON, "LOD de icono (px por casilla)", "Cuando una casilla mide menos de N pixeles en pantalla, cada edificio se dibuja con 1 solo sprite. 0 = off.");
+        title(RenderCuller.K_SOLID, "LOD solido (px por casilla)", "Mas lejos aun: casillas 1x1 como color plano y fusionadas en rectangulos (menos vertices). 0 = off.");
+        title(RenderCuller.K_MERGE, "Fusionar rectangulos (enmallado)", "Une casillas vecinas del mismo color en un solo quad.");
+        title(RenderCuller.K_STATS, "Estadisticas en el log", "Cada 600 frames imprime vertices ahorrados y coste en ms.");
+
+        Vars.ui.settings.addCategory("MindOptimized", Icon.settings, t -> {
+            t.checkPref(RenderCuller.K_ON, true);
+            t.checkPref(RenderCuller.K_FOG, true);
+            t.sliderPref(RenderCuller.K_ICON, 14, 0, 40, 1, i -> i <= 0 ? "off" : i + " px");
+            t.sliderPref(RenderCuller.K_SOLID, 6, 0, 24, 1, i -> i <= 0 ? "off" : i + " px");
+            t.checkPref(RenderCuller.K_MERGE, true);
+            t.checkPref(RenderCuller.K_STATS, true);
+        });
     }
 }
