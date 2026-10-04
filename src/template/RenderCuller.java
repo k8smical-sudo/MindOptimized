@@ -2,16 +2,11 @@ package template;
 
 import arc.Core;
 import arc.Events;
-import arc.graphics.Color;
-import arc.graphics.g2d.Draw;
-import arc.graphics.g2d.Fill;
-import arc.graphics.g2d.TextureRegion;
 import arc.struct.IntMap;
 import arc.struct.IntSeq;
 import arc.struct.Seq;
 import arc.util.Log;
 import arc.util.Time;
-import arc.util.Tmp;
 import mindustry.Vars;
 import mindustry.content.Blocks;
 import mindustry.game.EventType.Trigger;
@@ -19,32 +14,22 @@ import mindustry.game.EventType.WorldLoadEvent;
 import mindustry.game.Team;
 import mindustry.gen.Building;
 import mindustry.gen.Groups;
-import mindustry.gen.Unit;
 import mindustry.world.Block;
 import mindustry.world.Tile;
-import mindustry.world.blocks.ConstructBlock;
-import mindustry.world.blocks.logic.LogicDisplay;
 import mindustry.world.blocks.storage.CoreBlock;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.Arrays;
 
 public class RenderCuller{
     public static final String K_ON = "mo-on";
     public static final String K_FOG = "mo-fog";
-    public static final String K_ICON = "mo-lod-icon";
-    public static final String K_SOLID = "mo-lod-solid";
-    public static final String K_MERGE = "mo-merge";
-    public static final String K_UICON = "mo-unit-icon";
-    public static final String K_USOLID = "mo-unit-solid";
     public static final String K_SLEEP = "mo-sleep";
     public static final String K_SLEEP_HZ = "mo-sleep-hz";
     public static final String K_STATS = "mo-stats";
     public static final String K_PAR = "mo-par";
     public static final String K_THREADS = "mo-threads";
 
-    private static final int MAX_GRID = 0x200000;
     private static final int POLL_MASK = 15;
     private static final long SLEEP_SCAN_NS = 800000L;
     private static final int SLEEP_SCAN_TICKS = 8;
@@ -55,9 +40,6 @@ public class RenderCuller{
     private Seq<Tile> originalView;
 
     private final Seq<Tile> scratch = new Seq<>(false, 2048, Tile.class);
-    private final Seq<Tile> solidTiles = new Seq<>(false, 2048, Tile.class);
-    private final IntSeq solidColors = new IntSeq();
-    private int[] grid = new int[0];
 
 
     private static final Class<?>[] CRAFTER_TYPES = initCrafterTypes();
@@ -69,11 +51,10 @@ public class RenderCuller{
     private int scanCursor, sleepTick, sleepPeriod = 6;
     private boolean sleepOn;
 
-    private boolean on, cullFog, merge, statsOn;
-    private int iconPx, solidPx, uIconPx, uSolidPx;
+    private boolean on, cullFog, statsOn;
     private int poll;
 
-    private int sIn, sFog, sIcon, sSolidT, sSolidQ, sKept, sUI, sUS, frames;
+    private int sIn, sFog, sKept, frames;
     private long nanos, wNanos, wStart;
 
     private static Class<?>[] initCrafterTypes(){
@@ -104,11 +85,6 @@ public class RenderCuller{
     private void readSettings(){
         on = Core.settings.getBool(K_ON, true);
         cullFog = Core.settings.getBool(K_FOG, true);
-        iconPx = Core.settings.getInt(K_ICON, 14);
-        solidPx = Core.settings.getInt(K_SOLID, 6);
-        merge = Core.settings.getBool(K_MERGE, true);
-        uIconPx = Core.settings.getInt(K_UICON, 12);
-        uSolidPx = Core.settings.getInt(K_USOLID, 5);
         statsOn = Core.settings.getBool(K_STATS, true);
         parallel = Core.settings.getBool(K_PAR, true);
         Cores.get().configure(Core.settings.getInt(K_THREADS, 0));
@@ -210,25 +186,18 @@ public class RenderCuller{
 
             Team pteam = Vars.player.team();
             boolean fogOn = cullFog && Vars.state.rules.fog;
-            float ppt = (float)Core.graphics.getWidth() / Core.camera.width;
-            boolean doSolid = solidPx > 0 && ppt <= solidPx;
-            boolean doIcon = !doSolid && iconPx > 0 && ppt <= iconPx;
+            if(!fogOn) return; // sin niebla no hay nada que descartar: se deja la lista del juego intacta (cero coste)
 
             scratch.clear();
-            solidTiles.clear();
-            solidColors.clear();
-            int fog = 0, icon = 0;
+            int fog = 0;
 
             // ---- Fase 1: clasificar (solo lectura; se reparte entre núcleos si hay suficientes tiles) ----
             final int n = src.size;
             if(act.length < n){
                 act = new byte[n + 1024];
-                col = new int[n + 1024];
             }
             cTeam = pteam;
             cFogOn = fogOn;
-            cSolid = doSolid;
-            cIcon = doIcon;
             final Tile[] items = src.items;
 
             boolean ran = false;
@@ -244,39 +213,14 @@ public class RenderCuller{
             }
             if(!ran) classify(items, 0, n);
 
-            // ---- Fase 2: emitir (hilo principal; GL y listas compartidas) ----
+            // ---- Fase 2: construir la lista final (hilo principal) ----
             for(int i = 0; i < n; i++){
-                Tile tile = items[i];
-                switch(act[i]){
-                    case A_KEEP -> scratch.add(tile);
-                    case A_FOG -> fog++;
-                    case A_SOLID -> {
-                        solidTiles.add(tile);
-                        solidColors.add(col[i]);
-                    }
-                    case A_ICON -> {
-                        Block block = tile.block();
-                        Building build = tile.build;
-                        float scl = Draw.scl * block.size;
-                        float w = block.fullIcon.width * scl;
-                        float h = block.fullIcon.height * scl;
-                        Draw.z(30f);
-                        Draw.rect(block.fullIcon, tile.drawx(), tile.drawy(), w, h, build != null ? build.drawrot() : 0f);
-                        Draw.reset();
-                        icon++;
-                    }
-                    default -> {
-                    }
-                }
+                if(act[i] == A_KEEP) scratch.add(items[i]);
+                else fog++;
             }
 
-            int quads = solidTiles.size > 0 ? emitSolid() : 0;
-
-            sIn += src.size;
+            sIn += n;
             sFog += fog;
-            sIcon += icon;
-            sSolidT += solidTiles.size;
-            sSolidQ += quads;
             sKept += scratch.size;
 
             originalView = src;
@@ -294,50 +238,26 @@ public class RenderCuller{
         }
     }
 
-    private static final byte A_KEEP = 0, A_FOG = 2, A_SOLID = 3, A_ICON = 4;
+    private static final byte A_KEEP = 0, A_FOG = 1;
     private static final int PAR_MIN_TILES = 3000, PAR_CHUNK = 1500;
 
     // Parámetros de la clasificación del frame actual (se escriben en el hilo principal antes de repartir).
     private byte[] act = new byte[0];
-    private int[] col = new int[0];
     private Team cTeam;
-    private boolean cFogOn, cSolid, cIcon;
+    private boolean cFogOn;
     private boolean parallel = true, parFailed;
     private int sPar;
 
-    /** Decide qué hacer con cada tile en [from, to). Solo lee el mundo; no usa estado compartido mutable. */
+    /** Decide qué hacer con cada tile en [from, to): conservarlo o descartarlo por niebla. Solo lee el mundo. */
     private void classify(Tile[] items, int from, int to){
-        final Color c = new Color(); // uno por trozo: Tmp.c1 no es seguro entre hilos
         final Team pteam = cTeam;
+        final boolean fogOn = cFogOn;
 
         for(int i = from; i < to; i++){
             Tile tile = items[i];
-            Block block = tile.block();
             Building build = tile.build;
-
-            if(block == Blocks.air){
-                act[i] = A_KEEP;
-                continue;
-            }
-            if(cFogOn && build != null && build.inFogTo(pteam)){
-                act[i] = A_FOG;
-                continue;
-            }
-            if((cSolid || cIcon) && blockEligible(block) && (build == null || build.wasVisible)){
-                if(cSolid){
-                    c.set(block.mapColor);
-                    if(build != null && build.team != pteam){
-                        c.lerp(build.team.color, 0.45f);
-                    }
-                    c.a = 1f;
-                    col[i] = c.rgba();
-                    act[i] = A_SOLID;
-                }else{
-                    act[i] = A_ICON;
-                }
-                continue;
-            }
-            act[i] = A_KEEP;
+            boolean hidden = fogOn && tile.block() != Blocks.air && build != null && build.inFogTo(pteam);
+            act[i] = hidden ? A_FOG : A_KEEP;
         }
     }
 
@@ -351,105 +271,6 @@ public class RenderCuller{
             bindFailed = true;
         }
         originalView = null;
-    }
-
-    private static boolean blockEligible(Block b){
-        return !(b instanceof ConstructBlock) && !(b instanceof LogicDisplay) && !(b instanceof CoreBlock)
-            && b.fullIcon != null && b.fullIcon.found();
-    }
-
-    private int emitSolid(){
-        int n = solidTiles.size;
-
-        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, maxX = -1, maxY = -1;
-        for(int i = 0; i < n; i++){
-            Tile t = solidTiles.items[i];
-            if(t.block().size != 1) continue;
-            if(t.x < minX) minX = t.x;
-            if(t.x > maxX) maxX = t.x;
-            if(t.y < minY) minY = t.y;
-            if(t.y > maxY) maxY = t.y;
-        }
-
-        int w = 0, h = 0;
-        boolean useGrid = false;
-        if(merge && maxX >= minX && maxY >= minY){
-            w = maxX - minX + 1;
-            h = maxY - minY + 1;
-            useGrid = (long)w * (long)h <= MAX_GRID;
-        }
-
-        if(useGrid){
-            if(grid.length < w * h){
-                grid = new int[w * h];
-            }else{
-                Arrays.fill(grid, 0, w * h, 0);
-            }
-        }
-
-        int quads = 0;
-        Draw.z(30f);
-
-        for(int i = 0; i < n; i++){
-            Tile t = solidTiles.items[i];
-            int c = solidColors.items[i];
-
-            if(useGrid && t.block().size == 1){
-                grid[(t.y - minY) * w + (t.x - minX)] = c;
-                continue;
-            }
-
-            float s = t.block().size * 8f;
-            Draw.color(Tmp.c2.set(c));
-            Fill.rect(t.drawx(), t.drawy(), s, s);
-            quads++;
-        }
-
-        if(useGrid){
-            final int fx = minX, fy = minY;
-            quads += mergeGrid(grid, w, h, (gx, gy, rw, rh, c) -> {
-                Draw.color(Tmp.c2.set(c));
-                Fill.rect((fx + gx + (rw - 1) / 2f) * 8f, (fy + gy + (rh - 1) / 2f) * 8f, rw * 8f, rh * 8f);
-            });
-        }
-
-        Draw.reset();
-        return quads;
-    }
-
-    /** @return true si el RenderCuller ya dibujó la unidad (o está bajo niebla) y no hay que dibujarla completa. */
-    public boolean drawUnit(Unit unit){
-        if(!on || unit.dead || unit.inFogTo(Vars.player.team())){
-            return unit.inFogTo(Vars.player.team());
-        }
-
-        float ppt = (float)Core.graphics.getWidth() / Core.camera.width;
-        float unitPx = unit.hitSize * 2f * ppt / 8f;
-
-        if(uSolidPx > 0 && unitPx <= uSolidPx){
-            float sz = unit.hitSize * 2f;
-            Draw.z(unit.type.flying ? unit.type.flyingLayer : unit.type.groundLayer);
-            Draw.color(unit.team.color);
-            Fill.rect(unit.x, unit.y, sz, sz);
-            Draw.reset();
-            sUS++;
-            return true;
-        }
-
-        if(uIconPx > 0 && unitPx <= uIconPx){
-            TextureRegion r = unit.type.region != null && unit.type.region.found() ? unit.type.region : unit.type.fullIcon;
-            if(r != null && r.found()){
-                float sz = unit.hitSize * 2f;
-                Draw.z(unit.type.flying ? unit.type.flyingLayer : unit.type.groundLayer);
-                Draw.color(unit.team.color, 0.35f);
-                Draw.rect(r, unit.x, unit.y, sz, sz, unit.rotation - 90f);
-                Draw.color();
-                Draw.reset();
-                sUI++;
-                return true;
-            }
-        }
-        return false;
     }
 
     private boolean isCrafter(Block b){
@@ -604,59 +425,18 @@ public class RenderCuller{
         sleepTick = 0;
     }
 
-    public static int mergeGrid(int[] grid, int w, int h, RectSink sink){
-        int quads = 0;
-        for(int y = 0; y < h; y++){
-            for(int x = 0; x < w; x++){
-                int c = grid[y * w + x];
-                if(c == 0) continue;
-
-                int rw = 1;
-                while(x + rw < w && grid[y * w + x + rw] == c) rw++;
-
-                int rh = 1;
-                boolean ok = true;
-                while(ok && y + rh < h){
-                    int row = (y + rh) * w + x;
-                    for(int k = 0; k < rw; k++){
-                        if(grid[row + k] != c){
-                            ok = false;
-                            break;
-                        }
-                    }
-                    if(ok) rh++;
-                }
-
-                for(int yy = 0; yy < rh; yy++){
-                    int row = (y + yy) * w + x;
-                    for(int k = 0; k < rw; k++){
-                        grid[row + k] = 0;
-                    }
-                }
-
-                sink.rect(x, y, rw, rh, c);
-                quads++;
-            }
-        }
-        return quads;
-    }
-
     private void flushStats(){
         if(statsOn && frames > 0){
             Log.info(String.format(
-                "[MO] bloques/f: total=%d fog=%d icon=%d solid=%d->%dq kept=%d | unidades: icon=%d solid=%d | sleep=%d | par=%d/%d | MO %.3fms | mundo %.2fms",
-                sIn / frames, sFog / frames, sIcon / frames, sSolidT / frames, sSolidQ / frames, sKept / frames,
-                sUI / frames, sUS / frames, sleepMap.size, sPar, frames,
+                "[MO] bloques/f: total=%d niebla=%d conservados=%d | sleep=%d | par=%d/%d | MO %.3fms | mundo %.2fms",
+                sIn / frames, sFog / frames, sKept / frames,
+                sleepMap.size, sPar, frames,
                 nanos / (double)frames / 1e6, wNanos / (double)frames / 1e6));
         }
         frames = 0;
         sPar = 0;
-        sUS = sUI = sKept = sSolidQ = sSolidT = sIcon = sFog = sIn = 0;
+        sKept = sFog = sIn = 0;
         wNanos = nanos = 0L;
-    }
-
-    public interface RectSink{
-        void rect(int x, int y, int w, int h, int color);
     }
 
     private static class SleepEntry{

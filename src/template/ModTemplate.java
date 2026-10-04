@@ -7,10 +7,7 @@ import arc.util.Log;
 import mindustry.Vars;
 import mindustry.core.Version;
 import mindustry.game.EventType.ClientLoadEvent;
-import mindustry.game.EventType.Trigger;
-import mindustry.gen.Groups;
 import mindustry.gen.Icon;
-import mindustry.gen.Unit;
 import mindustry.mod.Mod;
 
 public class ModTemplate extends Mod{
@@ -23,8 +20,7 @@ public class ModTemplate extends Mod{
     private RenderCuller culler;
     private PerfTuner tuner;
     private PhysicsThrottle physics;
-    private boolean redraw = true;
-    private int redrawPoll;
+    private CameraTuner camera;
     private boolean failed;
 
     public ModTemplate(){
@@ -52,8 +48,15 @@ public class ModTemplate extends Mod{
                     physics = null;
                     Log.err("[MO] no se pudo iniciar PhysicsThrottle", t);
                 }
+                try{
+                    camera = new CameraTuner();
+                    camera.install();
+                }catch(Throwable t){
+                    camera = null;
+                    Log.err("[MO] no se pudo iniciar CameraTuner", t);
+                }
                 // Limpieza de ajustes de la ventana flotante eliminada.
-                for(String k : new String[]{"mo-win", "mo-win-pin", "mo-win-x", "mo-win-y", "mo-win-w", "mo-win-h", "mo-win-chrome", "mo-win-min"}){
+                for(String k : new String[]{"mo-win", "mo-win-pin", "mo-win-x", "mo-win-y", "mo-win-w", "mo-win-h", "mo-win-chrome", "mo-win-min", "mo-lod-icon", "mo-lod-solid", "mo-merge", "mo-unit-icon", "mo-unit-solid", "mo-redraw"}){
                     Core.settings.remove(k);
                 }
                 try{
@@ -70,26 +73,6 @@ public class ModTemplate extends Mod{
                 }
             });
 
-            Events.run(Trigger.draw, () -> {
-                if(failed || culler == null || !Vars.state.isGame()) return;
-                if((redrawPoll++ & 15) == 0) redraw = Core.settings.getBool("mo-redraw", true);
-                if(!redraw) return;
-                try{
-                    Groups.draw.draw(d -> {
-                        if(d instanceof Unit){
-                            Unit u = (Unit)d;
-                            if(!culler.drawUnit(u)){
-                                u.draw();
-                            }
-                        }else{
-                            d.draw();
-                        }
-                    });
-                }catch(Throwable t){
-                    failed = true;
-                    Log.err("[MO] draw falló; se desactiva el hook", t);
-                }
-            });
         }catch(Throwable t){
             Log.err("[MO] constructor de ModTemplate falló", t);
         }
@@ -107,16 +90,12 @@ public class ModTemplate extends Mod{
 
         t("mo-on", "MindOptimized activo", "Interruptor general. Apagado = vanilla puro.");
         t("mo-fog", "Omitir edificios bajo niebla", "Edificios 'recordados' pero bajo niebla = 0 vértices.");
-        t("mo-lod-icon", "LOD icono bloques (px/casilla)", "≤N px: 1 quad con el sprite completo del bloque. 0 = off.");
-        t("mo-lod-solid", "LOD sólido bloques (px/casilla)", "≤N px: color plano del bloque, fusionado en rectángulos. 0 = off.");
-        t("mo-merge", "Enmallado voraz (bloques)", "Une casillas contiguas del mismo color en 1 quad.");
-        t("mo-unit-icon", "LOD icono unidades (px)", "Unidades < N px en pantalla: 1 quad con su sprite base. 0 = off.");
-        t("mo-unit-solid", "LOD sólido unidades (px)", "Unidades < N px: rect de color de equipo. 0 = off.");
+        t("mo-cam-linear", "Cámara lineal (sin suavizado)", "Quita el suavizado de zoom, el seguimiento suave y la inercia al arrastrar. La cámara va directo al destino.");
+        t("mo-cam-snap", "Alinear cámara a píxeles", "Dibuja con la cámara alineada a la cuadrícula de píxeles de la pantalla (sin temblor de texturas). Solo con cámara lineal.");
         t("mo-sleep", "Sleep de fábricas fuera de vista", "Fábricas (taladros, crafters) fuera de cámara se duermen. Producción conservada con catch-up.");
         t("mo-sleep-hz", "Tickrate fuera de vista (hz)", "Hz efectivos de las fábricas dormidas. 10 = 1 tick cada 6 ticks reales.");
         t("mo-phys-budget", "Simplificar colisiones entre unidades (ms)", "Presupuesto de CPU por frame para el empuje entre unidades. Si se pasa, la física corre 1 de cada k frames (k adaptativo). 0 = desactivado. En multitudes las unidades se solapan algo más.");
         t("mo-phys-max", "Máximo de frames entre cálculos de empuje", "Tope de k. Más alto ahorra más CPU y solapa más.");
-        t("mo-redraw", "Redibujar entidades (LOD de unidades) [experimental]", "El mod dibuja las entidades por segunda vez para aplicar LOD. Apágalo para probar: si las unidades siguen visibles y baja el CPU, era un dibujado duplicado.");
         t("mo-tick-hz", "Tickrate local de la simulación", "Solo partidas locales. 60 = normal. Más bajo ahorra CPU pero la simulación se ve a saltos y balas/unidades pueden atravesar cosas. Se redondea a frames enteros.");
         t("mo-vsync-off", "Desactivar VSync", "Apaga la sincronización con la pantalla. El contador de FPS puede superar la tasa de refresco; la pantalla solo muestra hasta su tasa. Más calor y batería si no pones límite.");
         t("mo-fps-cap", "Límite de FPS", "Pausa estable entre frames. 0 = sin límite.");
@@ -128,16 +107,12 @@ public class ModTemplate extends Mod{
         Vars.ui.settings.addCategory("MindOptimized", (Drawable)Icon.settings, t -> {
             t.checkPref("mo-on", true);
             t.checkPref("mo-fog", true);
-            t.sliderPref("mo-lod-icon", 14, 0, 40, 1, i -> i <= 0 ? "off" : i + " px");
-            t.sliderPref("mo-lod-solid", 6, 0, 24, 1, i -> i <= 0 ? "off" : i + " px");
-            t.checkPref("mo-merge", true);
-            t.sliderPref("mo-unit-icon", 12, 0, 60, 1, i -> i <= 0 ? "off" : i + " px");
-            t.sliderPref("mo-unit-solid", 5, 0, 30, 1, i -> i <= 0 ? "off" : i + " px");
+            t.checkPref("mo-cam-linear", true);
+            t.checkPref("mo-cam-snap", true);
             t.checkPref("mo-sleep", true);
             t.sliderPref("mo-sleep-hz", 10, 1, 60, 1, i -> i >= 60 ? "sync (60 hz)" : i + " hz");
             t.sliderPref("mo-phys-budget", 2, 0, 10, 1, i -> i <= 0 ? "off" : i + " ms");
             t.sliderPref("mo-phys-max", 4, 1, 8, 1, i -> "1 de cada " + i);
-            t.checkPref("mo-redraw", true);
             t.sliderPref("mo-tick-hz", 60, 1, 60, 1, i -> i >= 60 ? "normal (60 hz)" : i + " hz");
             t.checkPref("mo-vsync-off", false);
             t.sliderPref("mo-fps-cap", 0, 0, 360, 5, i -> i <= 0 ? "sin límite" : i + " fps");
