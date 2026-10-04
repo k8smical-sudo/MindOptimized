@@ -15,11 +15,11 @@ import java.lang.reflect.Method;
  * Cámara lineal: sin suavizado de zoom, sin seguimiento suave y sin inercia al arrastrar.
  *
  *  - Zoom: el juego acerca/aleja con un lerp (camerascale -> destino, 10% por frame). Aquí camerascale salta
- *    directamente al destino que el propio juego calcula (objetivo redondeado a pasos de 0.5, dentro de sus límites),
- *    ANTES de que el renderer lo use en ese mismo frame (Trigger.update corre dentro de Logic, que va antes del renderer).
+ *    directamente al destino, ANTES de que el renderer lo use en ese mismo frame (Trigger.update corre dentro de Logic,
+ *    que va antes del renderer). El destino se autodetecta (ver snapZoom) para no pelear con el lerp del juego.
  *  - Seguimiento: se apaga el ajuste "smoothcamera" del juego mientras el módulo esté activo (y se restaura al apagarlo).
  *  - Inercia (gesto de lanzar en móvil): se pone a cero camVel cuando no hay dedos tocando la pantalla.
- *  - Alineado a píxeles (opcional): solo durante el dibujo, la posición de la cámara se redondea a la cuadrícula de
+ *  - Alineado a píxeles (opcional, apagado por defecto, solo con escala entera): solo durante el dibujo, la posición de la cámara se redondea a la cuadrícula de
  *    píxeles de la pantalla y se restaura después; la lógica nunca ve la posición redondeada.
  *
  * Expectativas realistas: el suavizado cuesta una interpolación por frame, es decir, casi nada; el beneficio está en que
@@ -33,7 +33,7 @@ public class CameraTuner{
     public static final String K_LINEAR = "mo-cam-linear";
     public static final String K_SNAP = "mo-cam-snap";
 
-    private boolean linear = true, snap = true;
+    private boolean linear = true, snap = false;
     private int poll;
 
     private Field fScale, fTarget;
@@ -65,7 +65,7 @@ public class CameraTuner{
         if((poll++ & 15) == 0){
             boolean wasLinear = linear;
             linear = Core.settings.getBool(K_LINEAR, true);
-            snap = Core.settings.getBool(K_SNAP, true);
+            snap = Core.settings.getBool(K_SNAP, false);
             if(wasLinear && !linear) restoreSmooth();
             if(linear) refreshLimits();
         }
@@ -150,18 +150,51 @@ public class CameraTuner{
         }
     }
 
+    /**
+     * Modos de destino del zoom:
+     *   1 = continuo (destino = objetivo del juego, dentro de límites)  <- se prueba primero
+     *   0 = redondeado a pasos de 0.5 (como el juego original)
+     *   2 = no tocar el zoom (el juego y nosotros no coinciden en ningún modo)
+     *
+     * Si el juego mueve camerascale a un valor distinto del que escribimos durante varios frames seguidos, significa
+     * que su destino no es el nuestro (nos estamos "peleando" con su lerp: eso es el temblor). Entonces se cambia de modo.
+     */
+    private int zoomMode = 1;
+    private boolean written;
+    private float lastWritten;
+    private int conflict;
+
     private void snapZoom() throws IllegalAccessException{
         bindZoom();
-        if(!zoomBound) return;
+        if(!zoomBound || zoomMode == 2) return;
+
+        float cur = fScale.getFloat(Vars.renderer);
+
+        if(written){
+            if(Math.abs(cur - lastWritten) > 0.002f){
+                if(++conflict >= 6){
+                    conflict = 0;
+                    written = false;
+                    zoomMode = zoomMode == 1 ? 0 : 2;
+                    Log.info("[MO] CameraTuner: el zoom del juego no coincide con el modo anterior; modo = "
+                        + (zoomMode == 0 ? "pasos de 0.5" : "desactivado (se deja el zoom del juego)"));
+                    return;
+                }
+            }else{
+                conflict = 0;
+            }
+        }
 
         float target = fTarget.getFloat(Vars.renderer);
-        float dest = Mathf.round(target, 0.5f);
+        float dest = zoomMode == 0 ? Mathf.round(target, 0.5f) : target;
         if(mMin != null && mMax != null) dest = Mathf.clamp(dest, minScale, maxScale);
         if(dest <= 0f || Float.isNaN(dest)) return;
 
-        if(Math.abs(fScale.getFloat(Vars.renderer) - dest) > 0.0001f){
+        if(Math.abs(cur - dest) > 0.0001f){
             fScale.setFloat(Vars.renderer, dest);
         }
+        lastWritten = dest;
+        written = true;
     }
 
     // ------------------------------------------------------------------ inercia al arrastrar (móvil)
@@ -202,6 +235,8 @@ public class CameraTuner{
         float w = Core.camera.width;
         if(w <= 0f) return;
         float ppt = Core.graphics.getWidth() / w; // píxeles de pantalla por unidad de mundo
+        // Con escala fraccionaria no existe una cuadrícula de píxeles a la que "encajar": redondear solo provoca temblor.
+        if(Math.abs(ppt - Math.round(ppt)) > 0.01f) return;
 
         savedX = Core.camera.position.x;
         savedY = Core.camera.position.y;

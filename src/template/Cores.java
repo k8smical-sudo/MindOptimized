@@ -32,6 +32,8 @@ public final class Cores{
     }
 
     public int logical = 1, fast = 1, little = 0, maxMHz;
+    /** strong[i] = el núcleo i es de los potentes (según cpu_capacity o frecuencia máxima). */
+    public boolean[] strong = new boolean[0];
     public String summary = "CPU sin detectar";
 
     /** Hilos que participan en un reparto, contando el hilo que llama. 1 = todo en serie. */
@@ -48,16 +50,26 @@ public final class Cores{
         try{
             logical = Math.max(1, Runtime.getRuntime().availableProcessors());
             int[] freq = new int[logical];
-            int max = 0;
+            int[] cap = new int[logical];
+            int max = 0, maxCap = 0;
             for(int i = 0; i < logical; i++){
                 freq[i] = readInt("/sys/devices/system/cpu/cpu" + i + "/cpufreq/cpuinfo_max_freq");
+                cap[i] = readInt("/sys/devices/system/cpu/cpu" + i + "/cpu_capacity"); // 1024 = núcleo más potente
                 max = Math.max(max, freq[i]);
+                maxCap = Math.max(maxCap, cap[i]);
             }
+
+            // cpu_capacity distingue núcleos aunque reporten la misma frecuencia máxima; si no existe, se usa la frecuencia.
+            int[] metric = maxCap > 0 ? cap : freq;
+            int mMax = maxCap > 0 ? maxCap : max;
+            strong = new boolean[logical];
 
             int f = 0, l = 0;
             for(int i = 0; i < logical; i++){
                 // Sin dato legible: se cuenta como rápido para no infravalorar el equipo.
-                if(max > 0 && freq[i] > 0 && freq[i] < max * 0.7f) l++;
+                boolean weak = mMax > 0 && metric[i] > 0 && metric[i] < mMax * 0.7f;
+                strong[i] = !weak;
+                if(weak) l++;
                 else f++;
             }
             fast = Math.max(1, f);

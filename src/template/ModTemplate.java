@@ -21,6 +21,7 @@ public class ModTemplate extends Mod{
     private PerfTuner tuner;
     private PhysicsThrottle physics;
     private CameraTuner camera;
+    private SysMonitor monitor;
     private boolean failed;
 
     public ModTemplate(){
@@ -54,6 +55,13 @@ public class ModTemplate extends Mod{
                 }catch(Throwable t){
                     camera = null;
                     Log.err("[MO] no se pudo iniciar CameraTuner", t);
+                }
+                try{
+                    monitor = new SysMonitor();
+                    monitor.install();
+                }catch(Throwable t){
+                    monitor = null;
+                    Log.err("[MO] no se pudo iniciar SysMonitor", t);
                 }
                 // Limpieza de ajustes de la ventana flotante eliminada.
                 for(String k : new String[]{"mo-win", "mo-win-pin", "mo-win-x", "mo-win-y", "mo-win-w", "mo-win-h", "mo-win-chrome", "mo-win-min", "mo-lod-icon", "mo-lod-solid", "mo-merge", "mo-unit-icon", "mo-unit-solid", "mo-redraw"}){
@@ -90,8 +98,12 @@ public class ModTemplate extends Mod{
 
         t("mo-on", "MindOptimized activo", "Interruptor general. Apagado = vanilla puro.");
         t("mo-fog", "Omitir edificios bajo niebla", "Edificios 'recordados' pero bajo niebla = 0 vértices.");
+        t("mo-mon", "Monitor de CPU/GPU", "0 = apagado, 1 = solo consola (cada ~10 s), 2 = en pantalla + consola. CPU por núcleo, GPU por frame y los hilos que más gastan.");
+        t("mo-mon-x", "Monitor: posición X (%)", "Posición horizontal del monitor en pantalla.");
+        t("mo-mon-y", "Monitor: posición Y (%)", "Posición vertical desde arriba. Por defecto queda bajo el contador de FPS.");
+        t("mo-balance", "Balanceador de hilos", "Sube la prioridad de los hilos propios que más CPU usan. Android no permite fijar hilos a núcleos concretos; solo influye en cuál tiene preferencia.");
         t("mo-cam-linear", "Cámara lineal (sin suavizado)", "Quita el suavizado de zoom, el seguimiento suave y la inercia al arrastrar. La cámara va directo al destino.");
-        t("mo-cam-snap", "Alinear cámara a píxeles", "Dibuja con la cámara alineada a la cuadrícula de píxeles de la pantalla (sin temblor de texturas). Solo con cámara lineal.");
+        t("mo-cam-snap", "Alinear cámara a píxeles", "Solo actúa con zoom de escala entera. Puede hacer vibrar levemente lo que la cámara sigue; apagado por defecto.");
         t("mo-sleep", "Sleep de fábricas fuera de vista", "Fábricas (taladros, crafters) fuera de cámara se duermen. Producción conservada con catch-up.");
         t("mo-sleep-hz", "Tickrate fuera de vista (hz)", "Hz efectivos de las fábricas dormidas. 10 = 1 tick cada 6 ticks reales.");
         t("mo-phys-budget", "Simplificar colisiones entre unidades (ms)", "Presupuesto de CPU por frame para el empuje entre unidades. Si se pasa, la física corre 1 de cada k frames (k adaptativo). 0 = desactivado. En multitudes las unidades se solapan algo más.");
@@ -107,8 +119,12 @@ public class ModTemplate extends Mod{
         Vars.ui.settings.addCategory("MindOptimized", (Drawable)Icon.settings, t -> {
             t.checkPref("mo-on", true);
             t.checkPref("mo-fog", true);
+            t.sliderPref("mo-mon", 2, 0, 2, 1, i -> i == 0 ? "apagado" : i == 1 ? "consola" : "pantalla");
+            t.sliderPref("mo-mon-x", 41, 0, 90, 1, i -> i + "%");
+            t.sliderPref("mo-mon-y", 13, 0, 90, 1, i -> i + "%");
+            t.checkPref("mo-balance", true);
             t.checkPref("mo-cam-linear", true);
-            t.checkPref("mo-cam-snap", true);
+            t.checkPref("mo-cam-snap", false);
             t.checkPref("mo-sleep", true);
             t.sliderPref("mo-sleep-hz", 10, 1, 60, 1, i -> i >= 60 ? "sync (60 hz)" : i + " hz");
             t.sliderPref("mo-phys-budget", 2, 0, 10, 1, i -> i <= 0 ? "off" : i + " ms");
