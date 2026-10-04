@@ -50,6 +50,11 @@ public class RenderCuller{
     private final Seq<Building> toSleepNew = new Seq<>(false, 64, Building.class);
     private int scanCursor, sleepTick, sleepPeriod = 6;
     private boolean sleepOn;
+    // "fuera de vista" también incluye edificios de otros equipos bajo niebla (idea del antiguo culling en JS)
+    private boolean sleepFog, fogFailed;
+    private Team sleepTeam;
+    private Object fogCtl;
+    private java.lang.reflect.Method mFogVisible;
 
     private boolean on, cullFog, statsOn;
     private int poll;
@@ -282,19 +287,49 @@ public class RenderCuller{
 
     private boolean offScreen(Building b){
         float margin = b.block.size * 8f + 16f;
-        return Math.abs(b.x - Core.camera.position.x) > Core.camera.width * 0.5f + margin
-            || Math.abs(b.y - Core.camera.position.y) > Core.camera.height * 0.5f + margin;
+        if(Math.abs(b.x - Core.camera.position.x) > Core.camera.width * 0.5f + margin
+            || Math.abs(b.y - Core.camera.position.y) > Core.camera.height * 0.5f + margin){
+            return true;
+        }
+        // Edificio de otro equipo que el jugador no ve ahora mismo (niebla): también cuenta como fuera de vista.
+        return sleepFog && sleepTeam != null && b.team != sleepTeam && !fogVisible(b);
+    }
+
+    private boolean fogVisible(Building b){
+        if(fogFailed) return true;
+        try{
+            if(mFogVisible == null){
+                fogCtl = Refl.getStatic(Vars.class, "fogControl");
+                if(fogCtl == null){
+                    fogFailed = true;
+                    return true;
+                }
+                mFogVisible = fogCtl.getClass().getMethod("isVisible", Team.class, float.class, float.class);
+            }
+            return (Boolean)mFogVisible.invoke(fogCtl, sleepTeam, b.x, b.y);
+        }catch(Throwable t){
+            fogFailed = true; // otra firma en esta versión: sin niebla en el criterio, pero el resto sigue igual
+            Refl.once("niebla en sleep", t);
+            return true;
+        }
+    }
+
+    /** Un procesador lógico controla este edificio (enabledControlTime > 0): no se toca. */
+    private boolean controlled(Building b){
+        return Refl.getF(b, "enabledControlTime", 0f) > 0f;
     }
 
     private void forceSleep(Building b){
         try{
             fSleepTime.setFloat(b, 61f);
+            b.enabled = false; // dormida no debe seguir pidiendo energía al grafo; el tick de puesta al día la pide de golpe
             b.sleep();
         }catch(Throwable ignored){
         }
     }
 
     private void forceWake(Building b, int period){
+        b.enabled = true;
         b.noSleep();
         if(period > 1){
             try{
@@ -330,6 +365,8 @@ public class RenderCuller{
 
         sleepTick++;
         final int P = sleepPeriod;
+        sleepFog = Vars.state.rules.fog;
+        sleepTeam = Vars.player != null ? Vars.player.team() : null;
 
         // 1) Entradas registradas
         toWake.clear();
@@ -344,6 +381,13 @@ public class RenderCuller{
             if(!b.isValid()){ // destruido, deconstruido o reemplazado
                 if(toRemove == null) toRemove = new IntSeq();
                 toRemove.add(e.key);
+                continue;
+            }
+
+            if(controlled(b)){ // un procesador lógico lo controla: se libera y se deja en paz
+                if(toRemove == null) toRemove = new IntSeq();
+                toRemove.add(e.key);
+                toFree.add(b);
                 continue;
             }
 
@@ -396,7 +440,8 @@ public class RenderCuller{
             checked++;
 
             if(b == null || !b.isAdded() || sleepMap.containsKey(b.id)) continue;
-            if(isCrafter(b.block) && !(b.block instanceof CoreBlock) && b.enabled && !isSleeping(b) && offScreen(b)){
+            if(isCrafter(b.block) && !(b.block instanceof CoreBlock) && b.enabled && !isSleeping(b)
+                && Refl.getB(b.block, "canOverdrive", true) && !controlled(b) && offScreen(b)){
                 toSleepNew.add(b);
             }
         }

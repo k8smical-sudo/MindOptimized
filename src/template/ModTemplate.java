@@ -22,6 +22,9 @@ public class ModTemplate extends Mod{
     private PhysicsThrottle physics;
     private CameraTuner camera;
     private SysMonitor monitor;
+    private TextureScaler textures;
+    private boolean convOk;
+    private FlatRender flat;
     private boolean failed;
 
     public ModTemplate(){
@@ -63,6 +66,44 @@ public class ModTemplate extends Mod{
                     monitor = null;
                     Log.err("[MO] no se pudo iniciar SysMonitor", t);
                 }
+                try{
+                    ConveyorLOD.install();
+                    convOk = true;
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo iniciar ConveyorLOD", t);
+                }
+                // Migración desde el antiguo main.js: su culling agresivo era un duplicado del sleep de RenderCuller.
+                try{
+                    if(Core.settings.has("flat-cull") && !Core.settings.has(RenderCuller.K_SLEEP)){
+                        Core.settings.put(RenderCuller.K_SLEEP, Core.settings.getBool("flat-cull", false));
+                        Core.settings.put(RenderCuller.K_SLEEP_HZ, Core.settings.getInt("flat-cull-hz", 10));
+                        Log.info("[MO] ajustes de culling migrados desde flat-cull a mo-sleep");
+                    }
+                    Core.settings.remove("flat-cull");
+                    Core.settings.remove("flat-cull-hz");
+                }catch(Throwable t){
+                    Log.err("[MO] migración de ajustes falló", t);
+                }
+                // Port nativo del antiguo main.js (Flat Performance): texturas primero, luego render/aspecto.
+                try{
+                    textures = new TextureScaler();
+                    textures.install();
+                }catch(Throwable t){
+                    textures = null;
+                    Log.err("[MO] no se pudo iniciar TextureScaler", t);
+                }
+                try{
+                    flat = new FlatRender();
+                    flat.install();
+                }catch(Throwable t){
+                    flat = null;
+                    Log.err("[MO] no se pudo iniciar FlatRender", t);
+                }
+                try{
+                    FlatSettings.register();
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo crear la categoría Flat Performance", t);
+                }
                 // Limpieza de ajustes de la ventana flotante eliminada.
                 for(String k : new String[]{"mo-win", "mo-win-pin", "mo-win-x", "mo-win-y", "mo-win-w", "mo-win-h", "mo-win-chrome", "mo-win-min", "mo-lod-icon", "mo-lod-solid", "mo-merge", "mo-unit-icon", "mo-unit-solid", "mo-redraw"}){
                     Core.settings.remove(k);
@@ -102,6 +143,10 @@ public class ModTemplate extends Mod{
         t("mo-mon-x", "Monitor: posición X (%)", "Posición horizontal del monitor en pantalla.");
         t("mo-mon-y", "Monitor: posición Y (%)", "Posición vertical desde arriba. Por defecto queda bajo el contador de FPS.");
         t("mo-balance", "Balanceador de hilos", "Sube la prioridad de los hilos propios que más CPU usan. Android no permite fijar hilos a núcleos concretos; solo influye en cuál tiene preferencia.");
+        t("mo-conv-max", "Cintas lejanas: periodo máximo", "Las cintas lejos de la cámara actualizan 1 de cada k ticks (movimiento compensado, mismo flujo). 1 = apagado. El nivel real lo decide el controlador según la carga de la lógica.");
+        t("mo-conv-budget", "Cintas: presupuesto de lógica (ms)", "El controlador sube la simplificación cuando la lógica pasa de este valor y la baja cuando sobra. 0 = siempre al máximo.");
+        t("mo-conv-near", "Cintas: radio cercano", "Radio (en pantallas) donde las cintas se simulan a tick completo. Más pequeño = más ahorro, más cintas a saltos cerca del borde.");
+        t("mo-conv-items", "Ocultar ítems de cintas al alejar (px/casilla)", "Si la casilla mide menos píxeles que este valor, las cintas no dibujan sus ítems. 0 = nunca.");
         t("mo-cam-linear", "Cámara lineal (sin suavizado)", "Quita el suavizado de zoom, el seguimiento suave y la inercia al arrastrar. La cámara va directo al destino.");
         t("mo-cam-snap", "Alinear cámara a píxeles", "Solo actúa con zoom de escala entera. Puede hacer vibrar levemente lo que la cámara sigue; apagado por defecto.");
         t("mo-sleep", "Sleep de fábricas fuera de vista", "Fábricas (taladros, crafters) fuera de cámara se duermen. Producción conservada con catch-up.");
@@ -111,7 +156,7 @@ public class ModTemplate extends Mod{
         t("mo-tick-hz", "Tickrate local de la simulación", "Solo partidas locales. 60 = normal. Más bajo ahorra CPU pero la simulación se ve a saltos y balas/unidades pueden atravesar cosas. Se redondea a frames enteros.");
         t("mo-vsync-off", "Desactivar VSync", "Apaga la sincronización con la pantalla. El contador de FPS puede superar la tasa de refresco; la pantalla solo muestra hasta su tasa. Más calor y batería si no pones límite.");
         t("mo-fps-cap", "Límite de FPS", "Pausa estable entre frames. 0 = sin límite.");
-        t("mo-refresh", "Frecuencia de pantalla preferida", "Pide a Android esa tasa (Hz). Menos de 30 = automático. El sistema puede ignorarlo.");
+        t("mo-refresh", "Frecuencia de pantalla preferida", "0 = decide el sistema. 1-29 = el máximo que soporte la pantalla. 30 o más = esa tasa (o la más cercana). Se pide el modo de pantalla real; el sistema puede ignorarlo.");
         t("mo-threads", "Hilos de trabajo", "0 = automático según los núcleos rápidos de tu CPU. Incluye el hilo principal.");
         t("mo-par", "Clasificación de bloques en paralelo", "Reparte el recorte de bloques entre núcleos cuando hay muchos tiles en pantalla.");
         t("mo-stats", "Estadísticas en el log", "Cada 600 frames imprime métricas de vértices y tiempos.");
@@ -123,6 +168,10 @@ public class ModTemplate extends Mod{
             t.sliderPref("mo-mon-x", 41, 0, 90, 1, i -> i + "%");
             t.sliderPref("mo-mon-y", 13, 0, 90, 1, i -> i + "%");
             t.checkPref("mo-balance", true);
+            t.sliderPref("mo-conv-max", 4, 1, 16, 1, i -> i <= 1 ? "apagado" : "1 de cada " + i);
+            t.sliderPref("mo-conv-budget", 10, 0, 40, 1, i -> i <= 0 ? "máximo fijo" : i + " ms");
+            t.sliderPref("mo-conv-near", 10, 5, 30, 1, i -> (i / 10f) + " pantallas");
+            t.sliderPref("mo-conv-items", 0, 0, 16, 1, i -> i <= 0 ? "nunca" : "< " + i + " px");
             t.checkPref("mo-cam-linear", true);
             t.checkPref("mo-cam-snap", false);
             t.checkPref("mo-sleep", true);
@@ -132,7 +181,7 @@ public class ModTemplate extends Mod{
             t.sliderPref("mo-tick-hz", 60, 1, 60, 1, i -> i >= 60 ? "normal (60 hz)" : i + " hz");
             t.checkPref("mo-vsync-off", false);
             t.sliderPref("mo-fps-cap", 0, 0, 360, 5, i -> i <= 0 ? "sin límite" : i + " fps");
-            t.sliderPref("mo-refresh", 0, 0, 165, 1, i -> i < 30 ? "auto" : i + " hz");
+            t.sliderPref("mo-refresh", 1, 0, 165, 1, i -> i == 0 ? "sistema" : i < 30 ? "máximo" : i + " hz");
             t.add("[lightgray]" + Cores.get().summary + "[]").pad(6f).left().wrap().width(480f).row();
             t.sliderPref("mo-threads", 0, 0, 16, 1, i -> i <= 0 ? "auto (" + Cores.get().autoThreads() + ")" : String.valueOf(i));
             t.checkPref("mo-par", true);

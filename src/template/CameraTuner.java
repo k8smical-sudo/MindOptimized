@@ -231,6 +231,7 @@ public class CameraTuner{
     private void onPreDraw(){
         snapped = false;
         if(!linear || !snap || Vars.headless || !Vars.state.isGame()) return;
+        if(Core.settings.getInt("flat-div", 1) > 1) return; // FlatRender ya alinea la cámara a su rejilla: no pelear con él
 
         float w = Core.camera.width;
         if(w <= 0f) return;

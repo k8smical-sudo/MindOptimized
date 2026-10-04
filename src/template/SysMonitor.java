@@ -341,6 +341,9 @@ public class SysMonitor{
         if(hw >= 0) sb.append("  [lightgray]hw ").append(hw).append("%[]");
         sb.append("  [gray]").append(Math.round(frames / wall)).append(" f/s[]");
 
+        String conv = ConveyorLOD.status();
+        if(!conv.isEmpty()) sb.append('\n').append(conv);
+
         // hilos más pesados del proceso
         ArrayList<Th> list = new ArrayList<>(threads.values());
         Collections.sort(list, (a, b) -> Float.compare(b.pct, a.pct));

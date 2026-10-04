@@ -79,8 +79,8 @@ public class PerfTuner{
         liftVanillaCap(own);
 
         // --- frecuencia de pantalla ---
-        int r = Core.settings.getInt(K_REFRESH, 0);
-        if(r < 30) r = 0;
+        // 0 = el sistema decide; 1..29 = el máximo que soporte la pantalla; 30+ = esa tasa (o la más cercana).
+        int r = Core.settings.getInt(K_REFRESH, 1);
         if(r != lastRefresh){
             lastRefresh = r;
             applyRefresh(r);
@@ -159,7 +159,13 @@ public class PerfTuner{
 
     // ------------------------------------------------------------------ frecuencia de pantalla
 
-    private void applyRefresh(int hz){
+    /**
+     * Pide a Android un modo de pantalla concreto (preferredDisplayModeId + preferredRefreshRate). Elige entre los
+     * modos con la MISMA resolución física que el actual: el más rápido, o el más cercano a la tasa pedida.
+     * Es el método que usaba el antiguo main.js (más fiable que pedir solo preferredRefreshRate, que el sistema ignora
+     * a menudo). El sistema puede rechazarlo igualmente.
+     */
+    private void applyRefresh(int setting){
         if(!Core.app.isAndroid()) return;
         try{
             final Object app = Core.app;
@@ -170,18 +176,53 @@ public class PerfTuner{
             }
 
             final Class<?> windowC = Class.forName("android.view.Window");
+            final Class<?> wmC = Class.forName("android.view.WindowManager");
+            final Class<?> displayC = Class.forName("android.view.Display");
+            final Class<?> modeC = Class.forName("android.view.Display$Mode");
             final Class<?> paramsC = Class.forName("android.view.WindowManager$LayoutParams");
-            final float rate = hz;
+            final int want = setting;
 
             Runnable job = () -> {
                 try{
                     Object window = activity.getMethod("getWindow").invoke(app);
                     Object lp = windowC.getMethod("getAttributes").invoke(window);
+
+                    int modeId = 0;
+                    float rate = 0f;
+                    if(want > 0){
+                        Object wm = activity.getMethod("getWindowManager").invoke(app);
+                        Object disp = wmC.getMethod("getDefaultDisplay").invoke(wm);
+                        Object cur = displayC.getMethod("getMode").invoke(disp);
+                        Object modes = displayC.getMethod("getSupportedModes").invoke(disp);
+
+                        Method gw = modeC.getMethod("getPhysicalWidth"), gh = modeC.getMethod("getPhysicalHeight");
+                        Method gr = modeC.getMethod("getRefreshRate"), gid = modeC.getMethod("getModeId");
+                        int cw = (Integer)gw.invoke(cur), ch = (Integer)gh.invoke(cur);
+
+                        Object best = null;
+                        float bestScore = Float.MAX_VALUE;
+                        for(int i = 0; i < java.lang.reflect.Array.getLength(modes); i++){
+                            Object m = java.lang.reflect.Array.get(modes, i);
+                            if((Integer)gw.invoke(m) != cw || (Integer)gh.invoke(m) != ch) continue;
+                            float r = (Float)gr.invoke(m);
+                            float score = want >= 30 ? Math.abs(r - want) : -r; // menor = mejor
+                            if(best == null || score < bestScore - 0.01f){
+                                best = m;
+                                bestScore = score;
+                            }
+                        }
+                        if(best != null){
+                            modeId = (Integer)gid.invoke(best);
+                            rate = (Float)gr.invoke(best);
+                        }
+                    }
+
+                    paramsC.getField("preferredDisplayModeId").setInt(lp, modeId);
                     paramsC.getField("preferredRefreshRate").setFloat(lp, rate);
                     windowC.getMethod("setAttributes", paramsC).invoke(window, lp);
-                    Log.info("[MO] preferredRefreshRate = " + (rate <= 0 ? "auto" : rate + " hz"));
+                    Log.info("[MO] pantalla: " + (want <= 0 ? "decide el sistema" : "modo " + modeId + " a " + rate + " Hz"));
                 }catch(Throwable t){
-                    Log.err("[MO] preferredRefreshRate falló", t);
+                    Log.err("[MO] frecuencia de pantalla falló", t);
                 }
             };
             activity.getMethod("runOnUiThread", Runnable.class).invoke(app, job);
@@ -211,17 +252,29 @@ public class PerfTuner{
                 // En esta versión "modules" es un ApplicationListener[] (el log lo mostró); se admite también un Seq.
                 int idx = -1;
                 if(mods instanceof ApplicationListener[] arr){
+                    LogicTimer timer = null;
                     for(int i = 0; i < arr.length; i++){
                         if(arr[i] == Vars.logic){
                             idx = i;
                             break;
                         }
+                        // el medidor de lógica ocupa el hueco de Logic: el gobernador va DENTRO de él
+                        if(arr[i] instanceof LogicTimer lt && lt.inner == Vars.logic){
+                            idx = i;
+                            timer = lt;
+                            break;
+                        }
                     }
                     if(idx < 0) continue;
                     Governor g = new Governor(Vars.logic);
-                    g.array = arr;
                     g.index = idx;
-                    arr[idx] = g;
+                    if(timer != null){
+                        g.timer = timer;
+                        timer.inner = g;
+                    }else{
+                        g.array = arr;
+                        arr[idx] = g;
+                    }
                     governor = g;
                 }else if(mods instanceof Seq<?>){
                     Seq<ApplicationListener> seq = (Seq<ApplicationListener>)mods;
@@ -254,7 +307,9 @@ public class PerfTuner{
         governor = null;
         if(g == null) return;
         try{
-            if(g.array != null){
+            if(g.timer != null){
+                if(g.timer.inner == g) g.timer.inner = g.inner;
+            }else if(g.array != null){
                 if(g.array[g.index] == g) g.array[g.index] = g.inner;
             }else if(g.modules != null && g.modules.get(g.index) == g){
                 g.modules.set(g.index, g.inner);
@@ -286,6 +341,7 @@ public class PerfTuner{
         final ApplicationListener inner;
         Seq<ApplicationListener> modules;
         ApplicationListener[] array;
+        LogicTimer timer;
         int index;
         volatile int hz = 60;
 
