@@ -205,19 +205,38 @@ public class PerfTuner{
                 if(f == null) continue;
                 f.setAccessible(true);
 
-                Seq<ApplicationListener> modules = (Seq<ApplicationListener>)f.get(root);
-                if(modules == null) continue;
+                Object mods = f.get(root);
+                if(mods == null) continue;
 
-                int idx = modules.indexOf(Vars.logic, true);
-                if(idx < 0) continue;
+                // En esta versión "modules" es un ApplicationListener[] (el log lo mostró); se admite también un Seq.
+                int idx = -1;
+                if(mods instanceof ApplicationListener[] arr){
+                    for(int i = 0; i < arr.length; i++){
+                        if(arr[i] == Vars.logic){
+                            idx = i;
+                            break;
+                        }
+                    }
+                    if(idx < 0) continue;
+                    Governor g = new Governor(Vars.logic);
+                    g.array = arr;
+                    g.index = idx;
+                    arr[idx] = g;
+                    governor = g;
+                }else if(mods instanceof Seq<?>){
+                    Seq<ApplicationListener> seq = (Seq<ApplicationListener>)mods;
+                    idx = seq.indexOf(Vars.logic, true);
+                    if(idx < 0) continue;
+                    Governor g = new Governor(Vars.logic);
+                    g.modules = seq;
+                    g.index = idx;
+                    seq.set(idx, g);
+                    governor = g;
+                }else{
+                    continue;
+                }
 
-                Governor g = new Governor(Vars.logic);
-                modules.set(idx, g);
-                g.modules = modules;
-                g.index = idx;
-                governor = g;
-
-                Time.setDeltaProvider(g.provider);
+                Time.setDeltaProvider(governor.provider);
                 Log.info("[MO] tickrate local: gobernador instalado");
                 return;
             }
@@ -235,7 +254,11 @@ public class PerfTuner{
         governor = null;
         if(g == null) return;
         try{
-            if(g.modules.get(g.index) == g) g.modules.set(g.index, g.inner);
+            if(g.array != null){
+                if(g.array[g.index] == g) g.array[g.index] = g.inner;
+            }else if(g.modules != null && g.modules.get(g.index) == g){
+                g.modules.set(g.index, g.inner);
+            }
             Time.setDeltaProvider(Governor::vanillaDelta);
             Log.info("[MO] tickrate local: gobernador retirado");
         }catch(Throwable t){
@@ -262,6 +285,7 @@ public class PerfTuner{
     private static class Governor implements ApplicationListener{
         final ApplicationListener inner;
         Seq<ApplicationListener> modules;
+        ApplicationListener[] array;
         int index;
         volatile int hz = 60;
 

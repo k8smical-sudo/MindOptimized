@@ -63,6 +63,9 @@ public class RenderCuller{
     private static final Class<?>[] CRAFTER_TYPES = initCrafterTypes();
     private final IntMap<SleepEntry> sleepMap = new IntMap<>();
     private final Seq<Building> toWake = new Seq<>(false, 64, Building.class);
+    private final Seq<Building> toFree = new Seq<>(false, 64, Building.class);
+    private final Seq<Building> toResleep = new Seq<>(false, 64, Building.class);
+    private final Seq<Building> toSleepNew = new Seq<>(false, 64, Building.class);
     private int scanCursor, sleepTick, sleepPeriod = 6;
     private boolean sleepOn;
 
@@ -183,7 +186,16 @@ public class RenderCuller{
             readSettings();
         }
         if(sleepOn && Vars.state.isGame() && !Vars.net.client()){
-            tickSleep();
+            try{
+                tickSleep();
+            }catch(Throwable t){
+                Log.err("[MO] sleep falló; se desactiva hasta reiniciar el mundo", t);
+                sleepOn = false;
+                try{
+                    releaseAllSleep();
+                }catch(Throwable ignored){
+                }
+            }
         }
     }
 
@@ -480,6 +492,14 @@ public class RenderCuller{
         }
     }
 
+    /**
+     * Sleep de crafters fuera de pantalla.
+     *
+     * OJO: Building.sleep() hace remove() del edificio en Groups.build (y noSleep() lo vuelve a añadir). Por eso:
+     *  - los edificios dormidos NO aparecen en Groups.build ni cumplen isAdded(); se vigilan desde sleepMap con isValid();
+     *  - nunca se debe dormir/despertar mientras se recorre Groups.build (el tamaño cambia a mitad del bucle:
+     *    era el IndexOutOfBounds "index can't be >= size" del crash). Aquí se recolectan y se aplican después.
+     */
     private void tickSleep(){
         // Los campos reflejados se enlazan en bind(); sin ellos no hay sleep.
         if(fSleeping == null){
@@ -488,58 +508,43 @@ public class RenderCuller{
         }
 
         sleepTick++;
-        int P = sleepPeriod;
+        final int P = sleepPeriod;
 
+        // 1) Entradas registradas
         toWake.clear();
+        toFree.clear();
+        toResleep.clear();
+        IntSeq toRemove = null;
+
         for(IntMap.Entry<SleepEntry> e : sleepMap.entries()){
             SleepEntry se = e.value;
-            if(!se.b.isAdded()){
-                se.dead = true;
-                continue;
-            }
-            if(sleepTick % P != se.slot) continue;
-            toWake.add(se.b);
-        }
-        for(int i = 0; i < toWake.size; i++){
-            forceWake(toWake.items[i], P);
-        }
+            Building b = se.b;
 
-        if(sleepTick % SLEEP_SCAN_TICKS != 0) return;
-
-        long t0 = Time.nanos();
-        IntSeq toRemove = null;
-        int n = Groups.build.size();
-        if(n == 0){
-            scanCursor = 0;
-            return;
-        }
-        if(scanCursor >= n) scanCursor = 0;
-
-        int checked = 0;
-        while(checked < n && Time.nanos() - t0 < SLEEP_SCAN_NS){
-            Building b = Groups.build.index(scanCursor);
-            scanCursor = (scanCursor + 1) % n;
-            if(b == null || !b.isAdded()){
-                checked++;
+            if(!b.isValid()){ // destruido, deconstruido o reemplazado
+                if(toRemove == null) toRemove = new IntSeq();
+                toRemove.add(e.key);
                 continue;
             }
 
-            int id = b.id;
-            if(sleepMap.containsKey(id)){
-                SleepEntry se = sleepMap.get(id);
-                if(se.dead || !b.isAdded()){
+            if(se.asleep){
+                if(!offScreen(b)){ // el jugador se acerca: despertar definitivamente
                     if(toRemove == null) toRemove = new IntSeq();
-                    toRemove.add(id);
-                }else if(!offScreen(b)){
-                    if(toRemove == null) toRemove = new IntSeq();
-                    toRemove.add(id);
-                    forceWake(b, 1);
+                    toRemove.add(e.key);
+                    toFree.add(b);
+                }else if(sleepTick % P == se.slot){ // tick de puesta al día (con timeScale = P)
+                    toWake.add(b);
+                    se.asleep = false;
+                    se.wokeTick = sleepTick;
                 }
-            }else if(isCrafter(b.block) && !(b.block instanceof CoreBlock) && b.enabled && !isSleeping(b) && offScreen(b)){
-                sleepMap.put(id, new SleepEntry(b, P));
-                forceSleep(b);
+            }else if(sleepTick > se.wokeTick + 1){ // ya tuvo al menos un frame de update
+                if(offScreen(b)){
+                    toResleep.add(b);
+                    se.asleep = true;
+                }else{
+                    if(toRemove == null) toRemove = new IntSeq();
+                    toRemove.add(e.key);
+                }
             }
-            checked++;
         }
 
         if(toRemove != null){
@@ -547,12 +552,45 @@ public class RenderCuller{
                 sleepMap.remove(toRemove.items[i]);
             }
         }
+        for(int i = 0; i < toFree.size; i++) forceWake(toFree.items[i], 1);
+        for(int i = 0; i < toWake.size; i++) forceWake(toWake.items[i], P);
+        for(int i = 0; i < toResleep.size; i++) forceSleep(toResleep.items[i]);
+
+        // 2) Buscar nuevos candidatos (solo lectura de Groups.build; se duerme después)
+        if(sleepTick % SLEEP_SCAN_TICKS != 0) return;
+
+        final int n = Groups.build.size();
+        if(n == 0){
+            scanCursor = 0;
+            return;
+        }
+        if(scanCursor >= n) scanCursor = 0;
+
+        toSleepNew.clear();
+        long t0 = Time.nanos();
+        int checked = 0;
+        while(checked < n && Time.nanos() - t0 < SLEEP_SCAN_NS){
+            Building b = Groups.build.index(scanCursor);
+            scanCursor = (scanCursor + 1) % n;
+            checked++;
+
+            if(b == null || !b.isAdded() || sleepMap.containsKey(b.id)) continue;
+            if(isCrafter(b.block) && !(b.block instanceof CoreBlock) && b.enabled && !isSleeping(b) && offScreen(b)){
+                toSleepNew.add(b);
+            }
+        }
+
+        for(int i = 0; i < toSleepNew.size; i++){
+            Building b = toSleepNew.items[i];
+            sleepMap.put(b.id, new SleepEntry(b, P));
+            forceSleep(b);
+        }
     }
 
     private void releaseAllSleep(){
         for(IntMap.Entry<SleepEntry> e : sleepMap.entries()){
             try{
-                if(!e.value.b.isAdded()) continue;
+                if(!e.value.b.isValid()) continue;
                 forceWake(e.value.b, 1);
             }catch(Throwable ignored){
             }
@@ -625,7 +663,8 @@ public class RenderCuller{
         final Building b;
         final int id;
         final int slot;
-        boolean dead;
+        boolean asleep = true;
+        int wokeTick;
 
         SleepEntry(Building b, int period){
             this.b = b;
