@@ -3,6 +3,7 @@ package template;
 import arc.Core;
 import arc.Events;
 import arc.graphics.Pixmap;
+import arc.graphics.PixmapRegion;
 import arc.graphics.Texture;
 import arc.graphics.g2d.TextureAtlas.AtlasRegion;
 import arc.graphics.g2d.TextureRegion;
@@ -148,6 +149,7 @@ public class TextureScaler{
     }
 
     private void frame(){
+        if(MemGuard.loading) return; // durante la carga de un mapa no se compite por memoria ni CPU
         try{
             if(pumpIndex()) return;
             pumpQueue();
@@ -485,7 +487,8 @@ public class TextureScaler{
     private static final class Job{
         Info e;
         int div, alpha, w, h;
-        Pixmap src, out;
+        PixmapRegion src;
+        Pixmap out;
 
         /** Corre en cualquier hilo: solo lee src y escribe en su propio Pixmap. */
         void compute(){
@@ -568,13 +571,13 @@ public class TextureScaler{
 
     // ------------------------------------------------------------------ píxeles
 
-    private static Pixmap copyPix(Pixmap src, int w, int h){
+    private static Pixmap copyPix(PixmapRegion src, int w, int h){
         Pixmap out = new Pixmap(w, h);
         for(int y = 0; y < h; y++) for(int x = 0; x < w; x++) out.setRaw(x, y, src.get(x, y));
         return out;
     }
 
-    private static Pixmap downsample(Pixmap src, int w, int h, int d){
+    private static Pixmap downsample(PixmapRegion src, int w, int h, int d){
         int cw = Math.min(d, w), ch = Math.min(d, h);
         Pixmap out = new Pixmap(w, h);
         for(int by = 0; by < h; by += ch){
