@@ -136,6 +136,9 @@ public class TextureScaler{
     private final HashMap<String, Integer> want = new HashMap<>(), wantA = new HashMap<>();
     private final HashMap<String, String> applied = new HashMap<>();
     private final ArrayList<Object[]> queue = new ArrayList<>(); // {Info, categoría}
+    private final HashSet<String> inQueue = new HashSet<>();      // sin duplicados en la cola
+    private final HashMap<String, String> pendingSig = new HashMap<>();
+    private final HashMap<String, Long> pendingAt = new HashMap<>();
     private int qi;
     private boolean blurOn;
 
@@ -464,22 +467,35 @@ public class TextureScaler{
             want.put(c.id, d);
             wantA.put(c.id, al);
             String sig = d + "|" + al;
-            if(!sig.equals(applied.get(c.id))){
+            if(sig.equals(applied.get(c.id))){
+                pendingSig.remove(c.id);
+                continue;
+            }
+            // Mientras arrastras un slider cada valor intermedio sería una cola entera de texturas: se espera a que se asiente.
+            if(!sig.equals(pendingSig.get(c.id))){
+                pendingSig.put(c.id, sig);
+                pendingAt.put(c.id, Time.millis());
+            }else if(Time.millis() - pendingAt.get(c.id) >= 700L){
                 applied.put(c.id, sig);
+                pendingSig.remove(c.id);
                 enqueueCat(c.id);
             }
         }
         if(blurChanged){
             ArrayList<Info> bl = byCat.get("blur");
-            if(bl != null) for(Info e : bl) queue.add(new Object[]{e, e.cat});
+            if(bl != null) for(Info e : bl) enqueue(e, e.cat);
             Log.info("[MO] desenfoque " + (bo ? "anulado" : "restaurado") + " en " + (bl == null ? 0 : bl.size()) + " sprites");
         }
+    }
+
+    private void enqueue(Info e, String cat){
+        if(inQueue.add(e.r.name)) queue.add(new Object[]{e, cat});
     }
 
     private void enqueueCat(String id){
         ArrayList<Info> list = byCat.get(id);
         if(list == null) return;
-        for(Info e : list) queue.add(new Object[]{e, id});
+        for(Info e : list) enqueue(e, id);
         Log.info("[MO] categoría " + id + " -> " + list.size() + " texturas en cola (div " + want.get(id) + ")");
     }
 
@@ -528,19 +544,24 @@ public class TextureScaler{
         if(qi >= queue.size()){
             if(qi > 0){
                 queue.clear();
+                inQueue.clear();
                 qi = 0;
                 Log.info("[MO] texturas procesadas");
             }
             return;
         }
 
-        long t0 = Time.millis();
-        while(qi < queue.size() && Time.millis() - t0 < 6){
-            int batch = Math.min(24, queue.size() - qi);
+        // ~15% de lo que dura un frame (0,5 a 3 ms): procesar texturas nunca debe notarse en los FPS.
+        float frameMs = Core.graphics.getDeltaTime() * 1000f;
+        long budgetNs = (long)(Math.max(0.5f, Math.min(3f, frameMs * 0.15f)) * 1_000_000f);
+        long t0 = Time.nanos();
+        while(qi < queue.size() && Time.nanos() - t0 < budgetNs){
+            int batch = Math.min(8, queue.size() - qi);
             final Job[] js = new Job[batch];
             int cnt = 0;
             for(int i = 0; i < batch; i++){
                 Object[] q = queue.get(qi++);
+                inQueue.remove(((Info)q[0]).r.name);
                 try{
                     Job j = prepare((Info)q[0], (String)q[1]);
                     if(j != null) js[cnt++] = j;

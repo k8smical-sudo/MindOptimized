@@ -16,7 +16,7 @@ import java.lang.reflect.Method;
  *
  *  - Zoom: el juego acerca/aleja con un lerp (camerascale -> destino, 10% por frame). Aquí camerascale salta
  *    directamente al destino, ANTES de que el renderer lo use en ese mismo frame (Trigger.update corre dentro de Logic,
- *    que va antes del renderer). El destino se autodetecta (ver snapZoom) para no pelear con el lerp del juego.
+ *    que va antes del renderer). El valor final se fija en preDraw (ver applyZoom): no pelea con el lerp del juego.
  *  - Seguimiento: se apaga el ajuste "smoothcamera" del juego mientras el módulo esté activo (y se restaura al apagarlo).
  *  - Inercia (gesto de lanzar en móvil): se pone a cero camVel cuando no hay dedos tocando la pantalla.
  *  - Alineado a píxeles (opcional, apagado por defecto, solo con escala entera): solo durante el dibujo, la posición de la cámara se redondea a la cuadrícula de
@@ -73,12 +73,14 @@ public class CameraTuner{
 
         try{
             forceNoSmooth();
-            snapZoom();
             killInertia();
         }catch(Throwable t){
-            linear = false;
-            restoreSmooth();
-            Log.err("[MO] CameraTuner falló; se desactiva", t);
+            Refl.once("CameraTuner (cámara)", t);
+        }
+        try{
+            applyZoom(false);
+        }catch(Throwable t){
+            pauseZoom("update", t);
         }
     }
 
@@ -151,50 +153,57 @@ public class CameraTuner{
     }
 
     /**
-     * Modos de destino del zoom:
-     *   1 = continuo (destino = objetivo del juego, dentro de límites)  <- se prueba primero
-     *   0 = redondeado a pasos de 0.5 (como el juego original)
-     *   2 = no tocar el zoom (el juego y nosotros no coinciden en ningún modo)
+     * Zoom lineal, sin pelear con el juego.
      *
-     * Si el juego mueve camerascale a un valor distinto del que escribimos durante varios frames seguidos, significa
-     * que su destino no es el nuestro (nos estamos "peleando" con su lerp: eso es el temblor). Entonces se cambia de modo.
+     * Diseño anterior (eliminado): escribir camerascale en Trigger.update y vigilar si el juego lo movía; al creer que había
+     * "conflicto" se cambiaba de modo hasta quedar desactivado PARA SIEMPRE. El gesto de zoom con dos dedos se procesa
+     * después de Trigger.update y antes del renderer, así que ese "conflicto" era falso y el zoom volvía a vanilla.
+     *
+     * Diseño actual: el valor FINAL se fija en Trigger.preDraw, el último punto antes de dibujar, con el objetivo de ese
+     * mismo frame. Lo que se ve es siempre el objetivo actual, decida lo que decida el lerp del juego. Además, en
+     * Trigger.update se adelanta la misma escritura para que el lerp del juego casi no tenga nada que mover (y la entrada
+     * que usa camera.width vea valores coherentes). Nunca se desactiva por "conflicto": si algo lanza una excepción, se
+     * pausa 5 s y se reintenta.
      */
-    private int zoomMode = 1;
-    private boolean written;
-    private float lastWritten;
-    private int conflict;
+    private int zoomPause;
+    private boolean sizeChecked, sizeFormulaOk;
 
-    private void snapZoom() throws IllegalAccessException{
-        bindZoom();
-        if(!zoomBound || zoomMode == 2) return;
-
-        float cur = fScale.getFloat(Vars.renderer);
-
-        if(written){
-            if(Math.abs(cur - lastWritten) > 0.002f){
-                if(++conflict >= 6){
-                    conflict = 0;
-                    written = false;
-                    zoomMode = zoomMode == 1 ? 0 : 2;
-                    Log.info("[MO] CameraTuner: el zoom del juego no coincide con el modo anterior; modo = "
-                        + (zoomMode == 0 ? "pasos de 0.5" : "desactivado (se deja el zoom del juego)"));
-                    return;
-                }
-            }else{
-                conflict = 0;
-            }
+    private void applyZoom(boolean finalPass) throws IllegalAccessException{
+        if(zoomPause > 0){
+            zoomPause--;
+            return;
         }
+        bindZoom();
+        if(!zoomBound) return;
 
         float target = fTarget.getFloat(Vars.renderer);
-        float dest = zoomMode == 0 ? Mathf.round(target, 0.5f) : target;
+        float dest = target;
         if(mMin != null && mMax != null) dest = Mathf.clamp(dest, minScale, maxScale);
         if(dest <= 0f || Float.isNaN(dest)) return;
 
+        float cur = fScale.getFloat(Vars.renderer);
         if(Math.abs(cur - dest) > 0.0001f){
             fScale.setFloat(Vars.renderer, dest);
         }
-        lastWritten = dest;
-        written = true;
+
+        if(!finalPass) return;
+
+        // El renderer ya calculó camera.width/height con la escala suavizada; se rehace con la final.
+        float w = Core.graphics.getWidth(), h = Core.graphics.getHeight();
+        if(!sizeChecked){
+            sizeChecked = true;
+            sizeFormulaOk = Math.abs(Core.camera.width * cur - w) < 2f; // ¿camera.width == ancho / escala en esta versión?
+            if(!sizeFormulaOk) Log.info("[MO] CameraTuner: camera.width no es ancho/escala en esta versión; el zoom se aplica un frame tarde");
+        }
+        if(sizeFormulaOk && Math.abs(cur - dest) > 0.0001f){
+            Core.camera.width = w / dest;
+            Core.camera.height = h / dest;
+        }
+    }
+
+    private void pauseZoom(String where, Throwable t){
+        zoomPause = 300;
+        Refl.once("CameraTuner (" + where + ")", t);
     }
 
     // ------------------------------------------------------------------ inercia al arrastrar (móvil)
@@ -230,6 +239,13 @@ public class CameraTuner{
 
     private void onPreDraw(){
         snapped = false;
+        if(linear && !Vars.headless && Vars.state.isGame()){
+            try{
+                applyZoom(true);
+            }catch(Throwable t){
+                pauseZoom("preDraw", t);
+            }
+        }
         if(!linear || !snap || Vars.headless || !Vars.state.isGame()) return;
         if(Core.settings.getInt("flat-div", 1) > 1) return; // FlatRender ya alinea la cámara a su rejilla: no pelear con él
 

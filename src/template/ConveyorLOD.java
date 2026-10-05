@@ -121,7 +121,7 @@ public final class ConveyorLOD{
         // Centro de interés: la cámara (cuando sigue a tu unidad es lo mismo, y si exploras lejos, lo que miras).
         cx = Core.camera.position.x;
         cy = Core.camera.position.y;
-        float hw = Core.camera.width * 0.5f, hh = Core.camera.height * 0.5f;
+        float hw = Core.camera.width * 0.5f * WorldWindow.fracX, hh = Core.camera.height * 0.5f * WorldWindow.fracY;
         float near = (float)Math.sqrt(hw * hw + hh * hh) * Math.max(0.5f, nearK);
         near2 = near * near;
         float mid = near * 2.5f;

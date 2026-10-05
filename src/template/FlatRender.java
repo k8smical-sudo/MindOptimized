@@ -134,6 +134,7 @@ public class FlatRender{
     // ------------------------------------------------------------------ frame
 
     private void abortWorld(){
+        WorldWindow.end();
         snapped = false;
         animEnd();
         endFb();
@@ -163,7 +164,10 @@ public class FlatRender{
         animBegin();
 
         int d = div;
-        if(d <= 1 || !Vars.state.isGame()) return;
+        if(d <= 1 || !Vars.state.isGame()){
+            WorldWindow.begin(1); // recorte directo sobre la pantalla (si la zona personalizada está activa)
+            return;
+        }
 
         int w = Math.max(2, (int)Math.ceil(Core.graphics.getWidth() / (float)d));
         int h = Math.max(2, (int)Math.ceil(Core.graphics.getHeight() / (float)d));
@@ -182,16 +186,23 @@ public class FlatRender{
         fb.begin(Color.clear);
         fbBound = true;
         snapped = true;
+        WorldWindow.begin(d); // recorte en píxeles del framebuffer reducido
     }
 
     private void endWorld(){
         animEnd();
-        if(!snapped) return;
+        if(!snapped){
+            WorldWindow.end();
+            return;
+        }
         snapped = false;
         fbBound = false;
+        WorldWindow.end();
         fb.end();
+        WorldWindow.beginBlit(); // pantalla negra y volcado solo dentro de la zona
         Blending.disabled.apply();
         fb.blit(Shaders.screenspace);
+        WorldWindow.end();
         Core.camera.position.set(savedX, savedY);
     }
 

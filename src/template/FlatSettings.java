@@ -93,6 +93,24 @@ public final class FlatSettings{
     private static void build(SettingsMenuDialog.SettingsTable t){
         FlatRender fr = FlatRender.inst;
 
+        hdr(t, "res", "Resolución personalizada (centrada, sin estirar)");
+        noteRow(t, "res", "Resolución base detectada: " + Core.graphics.getWidth() + "×" + Core.graphics.getHeight()
+            + " px. La zona de juego queda centrada a escala 1:1 y el resto de la pantalla en negro. Los menús no se ven afectados. "
+            + "Todos los gestos funcionan dentro de la zona; los toques en las barras negras no actúan sobre el mundo.");
+        title("mo-res-on", "Activar zona de juego personalizada");
+        t.checkPref("mo-res-on", false);
+        title("mo-res-w", "Ancho de la zona de juego");
+        t.sliderPref("mo-res-w", 100, 20, 100, 1, s -> s + "%  ·  " + Math.round(Core.graphics.getWidth() * s / 100f) + " px");
+        title("mo-res-h", "Alto de la zona de juego");
+        t.sliderPref("mo-res-h", 100, 20, 100, 1, s -> s + "%  ·  " + Math.round(Core.graphics.getHeight() * s / 100f) + " px");
+        btnRow(t, "mo-res-p169", "Proporción 16:9", () -> WorldWindow.preset(16, 9));
+        btnRow(t, "mo-res-p916", "Proporción 9:16", () -> WorldWindow.preset(9, 16));
+        btnRow(t, "mo-res-p43", "Proporción 4:3", () -> WorldWindow.preset(4, 3));
+        btnRow(t, "mo-res-p34", "Proporción 3:4", () -> WorldWindow.preset(3, 4));
+        btnRow(t, "mo-res-p11", "Proporción 1:1", () -> WorldWindow.preset(1, 1));
+        btnRow(t, "mo-res-p219", "Proporción 21:9", () -> WorldWindow.preset(21, 9));
+        btnRow(t, "mo-res-full", "Pantalla completa", WorldWindow::full);
+
         hdr(t, "gen", "Rendimiento general");
         title("flat-div", "Resolución global del mundo");
         t.sliderPref("flat-div", 1, 1, 16, 1, s -> s <= 1 ? "off" : "÷" + s);

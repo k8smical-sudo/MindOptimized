@@ -111,6 +111,11 @@ public class ModTemplate extends Mod{
                     Log.err("[MO] no se pudo iniciar FlatRender", t);
                 }
                 try{
+                    WorldWindow.install();
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo iniciar WorldWindow", t);
+                }
+                try{
                     FlatSettings.register();
                 }catch(Throwable t){
                     Log.err("[MO] no se pudo crear la categoría Flat Performance", t);

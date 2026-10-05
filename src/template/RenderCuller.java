@@ -198,7 +198,9 @@ public class RenderCuller{
 
             Team pteam = Vars.player.team();
             boolean fogOn = cullFog && Vars.state.rules.fog;
-            if(!fogOn) return; // sin niebla no hay nada que descartar: se deja la lista del juego intacta (cero coste)
+            boolean winOn = WorldWindow.active;
+            if(winOn) WorldWindow.prepare(); // deja el rectángulo en mundo listo antes de leerlo desde varios hilos
+            if(!fogOn && !winOn) return; // nada que descartar: se deja la lista del juego intacta (cero coste)
 
             scratch.clear();
             int fog = 0;
@@ -210,6 +212,7 @@ public class RenderCuller{
             }
             cTeam = pteam;
             cFogOn = fogOn;
+            cWin = winOn;
             final Tile[] items = src.items;
 
             boolean ran = false;
@@ -250,13 +253,13 @@ public class RenderCuller{
         }
     }
 
-    private static final byte A_KEEP = 0, A_FOG = 1;
+    private static final byte A_KEEP = 0, A_FOG = 1, A_WIN = 2;
     private static final int PAR_MIN_TILES = 3000, PAR_CHUNK = 1500;
 
     // Parámetros de la clasificación del frame actual (se escriben en el hilo principal antes de repartir).
     private byte[] act = new byte[0];
     private Team cTeam;
-    private boolean cFogOn;
+    private boolean cFogOn, cWin;
     private boolean parallel = true, parFailed;
     private int sPar;
 
@@ -267,6 +270,10 @@ public class RenderCuller{
 
         for(int i = from; i < to; i++){
             Tile tile = items[i];
+            if(cWin && !WorldWindow.visible(tile.drawx(), tile.drawy(), tile.block().size * 4f + 8f)){
+                act[i] = A_WIN; // fuera de la zona de juego
+                continue;
+            }
             Building build = tile.build;
             boolean hidden = fogOn && tile.block() != Blocks.air && build != null && build.inFogTo(pteam);
             act[i] = hidden ? A_FOG : A_KEEP;
@@ -294,8 +301,9 @@ public class RenderCuller{
 
     private boolean offScreen(Building b){
         float margin = b.block.size * 8f + 16f;
-        if(Math.abs(b.x - Core.camera.position.x) > Core.camera.width * 0.5f + margin
-            || Math.abs(b.y - Core.camera.position.y) > Core.camera.height * 0.5f + margin){
+        // Con zona personalizada activa, "a la vista" es solo el rectángulo (fracX/fracY = 1 si no hay zona).
+        if(Math.abs(b.x - Core.camera.position.x) > Core.camera.width * 0.5f * WorldWindow.fracX + margin
+            || Math.abs(b.y - Core.camera.position.y) > Core.camera.height * 0.5f * WorldWindow.fracY + margin){
             return true;
         }
         // Edificio de otro equipo que el jugador no ve ahora mismo (niebla): también cuenta como fuera de vista.
@@ -480,7 +488,7 @@ public class RenderCuller{
     private void flushStats(){
         if(statsOn && frames > 0){
             Log.info(String.format(
-                "[MO] bloques/f: total=%d niebla=%d conservados=%d | sleep=%d | par=%d/%d | MO %.3fms | mundo %.2fms",
+                "[MO] bloques/f: total=%d descartados(niebla+zona)=%d conservados=%d | sleep=%d | par=%d/%d | MO %.3fms | mundo %.2fms",
                 sIn / frames, sFog / frames, sKept / frames,
                 sleepMap.size, sPar, frames,
                 nanos / (double)frames / 1e6, wNanos / (double)frames / 1e6));
