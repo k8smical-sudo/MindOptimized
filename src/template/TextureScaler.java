@@ -3,7 +3,6 @@ package template;
 import arc.Core;
 import arc.Events;
 import arc.graphics.Pixmap;
-import arc.graphics.PixmapRegion;
 import arc.graphics.Texture;
 import arc.graphics.g2d.TextureAtlas.AtlasRegion;
 import arc.graphics.g2d.TextureRegion;
@@ -484,10 +483,15 @@ public class TextureScaler{
         Log.info("[MO] categoría " + id + " -> " + list.size() + " texturas en cola (div " + want.get(id) + ")");
     }
 
+    /** Lectura de píxeles de la región del atlas. Se usa en vez del tipo concreto que devuelve Core.atlas.getPixmap. */
+    private interface PixSrc{
+        int get(int x, int y);
+    }
+
     private static final class Job{
         Info e;
         int div, alpha, w, h;
-        PixmapRegion src;
+        PixSrc src;
         Pixmap out;
 
         /** Corre en cualquier hilo: solo lee src y escribe en su propio Pixmap. */
@@ -515,7 +519,8 @@ public class TextureScaler{
         j.alpha = alpha;
         j.w = r.width;
         j.h = r.height;
-        j.src = Core.atlas.getPixmap(r); // página original en memoria (nunca se modifica)
+        var pr = Core.atlas.getPixmap(r); // página original en memoria (nunca se modifica)
+        j.src = (x, y) -> pr.get(x, y);
         return j;
     }
 
@@ -571,13 +576,13 @@ public class TextureScaler{
 
     // ------------------------------------------------------------------ píxeles
 
-    private static Pixmap copyPix(PixmapRegion src, int w, int h){
+    private static Pixmap copyPix(PixSrc src, int w, int h){
         Pixmap out = new Pixmap(w, h);
         for(int y = 0; y < h; y++) for(int x = 0; x < w; x++) out.setRaw(x, y, src.get(x, y));
         return out;
     }
 
-    private static Pixmap downsample(PixmapRegion src, int w, int h, int d){
+    private static Pixmap downsample(PixSrc src, int w, int h, int d){
         int cw = Math.min(d, w), ch = Math.min(d, h);
         Pixmap out = new Pixmap(w, h);
         for(int by = 0; by < h; by += ch){
