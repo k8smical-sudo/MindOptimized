@@ -94,7 +94,7 @@ public class RenderCuller{
         parallel = Core.settings.getBool(K_PAR, true);
         Cores.get().configure(Core.settings.getInt(K_THREADS, 0));
 
-        boolean newSleep = Core.settings.getBool(K_SLEEP, true) && !Vars.net.client();
+        boolean newSleep = Core.settings.getBool(K_SLEEP, true) && !Vars.net.active();
         if(!newSleep && sleepOn){
             releaseAllSleep();
         }
@@ -166,7 +166,8 @@ public class RenderCuller{
         if((poll++ & POLL_MASK) == 0){
             readSettings();
         }
-        if(sleepOn && Vars.state.isGame() && !Vars.net.client()){
+        // Solo en partidas locales: con red activa el host/servidor es la autoridad y otros jugadores ven esas fábricas.
+        if(sleepOn && Vars.state.isGame() && !Vars.net.active()){
             try{
                 tickSleep();
             }catch(Throwable t){
@@ -176,6 +177,12 @@ public class RenderCuller{
                     releaseAllSleep();
                 }catch(Throwable ignored){
                 }
+            }
+        }else if(sleepMap.size > 0){
+            // Se pasó a modo red (o se salió del mundo): todo lo dormido vuelve a la simulación normal.
+            try{
+                releaseAllSleep();
+            }catch(Throwable ignored){
             }
         }
     }

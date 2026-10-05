@@ -48,12 +48,22 @@ public final class ConveyorLOD{
     static boolean hideItems;
     static float pxTile = 99f, itemsMinPx;
 
+    /** Escala de movimiento del update en curso. Estático: solo se usa dentro de super.update() de UNA cinta a la vez. */
+    private static float stepScale = 1f;
+    /** Tope de k por bloque (indexado por Block.id), calculado una vez al instalar. */
+    private static int[] capById = new int[0];
+
+    private static boolean onlineOk = true;
     private static int maxFar = 4, level;
     private static float budgetMs = 10f, nearK = 1f;
     private static int registered;
     private static volatile String status = "";
 
     private ConveyorLOD(){
+    }
+
+    public static int registeredTypes(){
+        return registered;
     }
 
     public static String status(){
@@ -66,9 +76,12 @@ public final class ConveyorLOD{
         LogicTimer.install();
 
         int n = 0;
+        capById = new int[Vars.content.blocks().size + 1];
         for(Block b : Vars.content.blocks()){
             if(b.getClass() != Conveyor.class) continue; // solo la clase exacta: blindadas y demás conservan su lógica
             final Conveyor c = (Conveyor)b;
+            // Tope de k que conserva el rendimiento: floor(itemSpace / velocidad) - 1, con itemSpace = 0.4
+            if(b.id >= 0 && b.id < capById.length) capById[b.id] = Math.max(1, (int)(0.4f / Math.max(0.001f, c.speed)) - 1);
             Prov<Building> prov = () -> new Build(c);
             if(Refl.set(c, "buildType", prov)) n++;
         }
@@ -90,11 +103,15 @@ public final class ConveyorLOD{
             int px = Core.settings.getInt(K_ITEMS, 0);
             hideItems = px > 0;
             itemsMinPx = px;
+            onlineOk = Core.settings.getBool("mo-conv-online", true);
         }
 
         if(Vars.state.isGame()) pxTile = Core.graphics.getWidth() / Math.max(1f, Core.camera.width) * 8f;
 
-        active = registered > 0 && maxFar > 1 && Vars.state.isGame() && !Vars.net.active();
+        // Local: siempre. Cliente puro de una partida en red: solo cambia lo que ESE cliente simula/ve (el servidor es la
+        // autoridad). Host/servidor: nunca, porque otros jugadores dependen de esa simulación.
+        boolean netOk = !Vars.net.active() || (Vars.net.client() && onlineOk);
+        active = registered > 0 && maxFar > 1 && Vars.state.isGame() && netOk;
         if(!active){
             pMid = pFar = 1;
             level = 0;
@@ -144,14 +161,17 @@ public final class ConveyorLOD{
      * Conveyor), por eso el constructor usa la sintaxis "bloque.super()".
      */
     public static class Build extends Conveyor.ConveyorBuild{
-        private int period = 1;
-        private float lastTime = -1f, stepScale = 1f;
-        private final int cap;
+        // Solo 5 bytes de estado por cinta (con cientos de miles de cintas importa).
+        private byte period = 1;
+        private float lastTime = -1f;
 
         public Build(Conveyor block){
             block.super();
-            // Tope de k que conserva el rendimiento: floor(itemSpace / velocidad) - 1, con itemSpace = 0.4
-            cap = Math.max(1, (int)(0.4f / Math.max(0.001f, block.speed)) - 1);
+        }
+
+        private int cap(){
+            int i = block.id;
+            return i >= 0 && i < capById.length ? Math.max(1, capById[i]) : 1;
         }
 
         @Override
@@ -163,13 +183,13 @@ public final class ConveyorLOD{
             }
 
             int f = frame + id;
-            if((f & 31) == 0) period = Math.min(periodFor(x, y), cap); // se reevalúa escalonado: 1 de cada 32 frames
+            if((f & 31) == 0) period = (byte)Math.min(periodFor(x, y), cap()); // se reevalúa escalonado: 1 de cada 32 frames
             if(period > 1 && (f % period) != 0) return;                 // tick saltado: coste mínimo
 
             float now = Time.time;
             float d = Time.delta;
             if(period > 1 && lastTime >= 0f && d > 0.0001f){
-                stepScale = Math.max(1f, Math.min(cap * 2f, (now - lastTime) / d)); // tiempo real transcurrido desde el último update
+                stepScale = Math.max(1f, Math.min(cap() * 2f, (now - lastTime) / d)); // tiempo real transcurrido desde el último update
             }else{
                 stepScale = 1f;
             }

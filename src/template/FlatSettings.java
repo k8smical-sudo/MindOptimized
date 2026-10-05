@@ -1,7 +1,6 @@
 package template;
 
 import arc.Core;
-import arc.func.Intf;
 import arc.scene.event.Touchable;
 import arc.scene.style.Drawable;
 import arc.scene.style.TextureRegionDrawable;
@@ -18,6 +17,7 @@ import mindustry.ui.dialogs.BaseDialog;
 import mindustry.ui.dialogs.SettingsMenuDialog;
 
 import java.util.ArrayList;
+import java.util.function.IntFunction;
 
 /**
  * Categoría propia "Flat Performance" en Ajustes (antes la creaba main.js) y el panel de vista previa de texturas.
@@ -51,7 +51,7 @@ public final class FlatSettings{
         return Math.max(280f, Math.min(Core.graphics.getWidth() / Scl.scl(1f) - 120f, 620f));
     }
 
-    private static void hdr(SettingsMenuDialog.SettingsTable t, String key, String text){
+    static void hdr(SettingsMenuDialog.SettingsTable t, String key, String text){
         t.pref(new SettingsMenuDialog.SettingsTable.Setting("flat-h-" + key){
             @Override
             public void add(SettingsMenuDialog.SettingsTable table){
@@ -62,7 +62,7 @@ public final class FlatSettings{
         });
     }
 
-    private static void noteRow(SettingsMenuDialog.SettingsTable t, String key, String text){
+    static void noteRow(SettingsMenuDialog.SettingsTable t, String key, String text){
         t.pref(new SettingsMenuDialog.SettingsTable.Setting("flat-n-" + key){
             @Override
             public void add(SettingsMenuDialog.SettingsTable table){
@@ -73,7 +73,7 @@ public final class FlatSettings{
         });
     }
 
-    private static void btnRow(SettingsMenuDialog.SettingsTable t, String key, String text, Runnable fn){
+    static void btnRow(SettingsMenuDialog.SettingsTable t, String key, String text, Runnable fn){
         title(key, text);
         t.pref(new SettingsMenuDialog.SettingsTable.Setting(key){
             @Override
@@ -168,9 +168,9 @@ public final class FlatSettings{
     private static final class Row{
         final String key, title, type, desc;
         final int def;
-        final Intf<String> fmt;
+        final IntFunction<String> fmt;
 
-        Row(String key, String title, String type, int def, String desc, Intf<String> fmt){
+        Row(String key, String title, String type, int def, String desc, IntFunction<String> fmt){
             this.key = key;
             this.title = title;
             this.type = type;
@@ -236,7 +236,7 @@ public final class FlatSettings{
         header(root, "Ajustes del mod");
         Table tbl = new Table();
         for(Row s : ROWS){
-            String v = s.type.equals("bool") ? (Core.settings.getBool(s.key, s.def != 0) ? "ON" : "OFF") : s.fmt.get(Core.settings.getInt(s.key, s.def));
+            String v = s.type.equals("bool") ? (Core.settings.getBool(s.key, s.def != 0) ? "ON" : "OFF") : s.fmt.apply(Core.settings.getInt(s.key, s.def));
             settingRow(tbl, W, s.title, v, s.desc);
         }
         for(TextureScaler.Cat c : TextureScaler.CATS){

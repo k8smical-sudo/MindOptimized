@@ -48,6 +48,7 @@ public class ModTemplate extends Mod{
                 try{
                     physics = new PhysicsThrottle();
                     physics.install();
+                    Diagnostics.physics = physics;
                 }catch(Throwable t){
                     physics = null;
                     Log.err("[MO] no se pudo iniciar PhysicsThrottle", t);
@@ -65,6 +66,16 @@ public class ModTemplate extends Mod{
                 }catch(Throwable t){
                     monitor = null;
                     Log.err("[MO] no se pudo iniciar SysMonitor", t);
+                }
+                try{
+                    MemGuard.install();
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo iniciar MemGuard", t);
+                }
+                try{
+                    AndroidBoost.install();
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo iniciar AndroidBoost", t);
                 }
                 try{
                     ConveyorLOD.install();
@@ -143,6 +154,9 @@ public class ModTemplate extends Mod{
         t("mo-mon-x", "Monitor: posición X (%)", "Posición horizontal del monitor en pantalla.");
         t("mo-mon-y", "Monitor: posición Y (%)", "Posición vertical desde arriba. Por defecto queda bajo el contador de FPS.");
         t("mo-balance", "Balanceador de hilos", "Sube la prioridad de los hilos propios que más CPU usan. Android no permite fijar hilos a núcleos concretos; solo influye en cuál tiene preferencia.");
+        t("mo-conv-online", "Cintas simplificadas también como cliente online", "Como cliente de una partida en red, las cintas lejanas se simulan por niveles SOLO en tu dispositivo (el servidor manda). Nunca actúa si eres host. Apágalo si ves desajustes en cintas lejanas.");
+        t("mo-boost", "Más recursos al cargar/jugar mapas enormes", "Pantalla siempre encendida, rendimiento sostenido y aviso a Android (ADPF, Android 12+) de que el juego necesita más CPU durante la carga y con mapas de más de 100 000 edificios. No sube el límite de memoria de la app.");
+        t("mo-memlog", "Registrar memoria al cargar mapas", "Durante la carga de un mapa escribe en el log, cada segundo, la memoria Java, nativa y del sistema. Si el juego se cae, las últimas líneas dicen qué memoria se agotó.");
         t("mo-conv-max", "Cintas lejanas: periodo máximo", "Las cintas lejos de la cámara actualizan 1 de cada k ticks (movimiento compensado, mismo flujo). 1 = apagado. El nivel real lo decide el controlador según la carga de la lógica.");
         t("mo-conv-budget", "Cintas: presupuesto de lógica (ms)", "El controlador sube la simplificación cuando la lógica pasa de este valor y la baja cuando sobra. 0 = siempre al máximo.");
         t("mo-conv-near", "Cintas: radio cercano", "Radio (en pantallas) donde las cintas se simulan a tick completo. Más pequeño = más ahorro, más cintas a saltos cerca del borde.");
@@ -168,9 +182,19 @@ public class ModTemplate extends Mod{
             t.sliderPref("mo-mon-x", 41, 0, 90, 1, i -> i + "%");
             t.sliderPref("mo-mon-y", 13, 0, 90, 1, i -> i + "%");
             t.checkPref("mo-balance", true);
+            FlatSettings.hdr(t, "prof", "Perfiles de un toque");
+            FlatSettings.noteRow(t, "prof", "Cambian varios ajustes de golpe. La simulación (cintas, física, sleep) solo se toca en partidas locales y, las cintas, también como cliente; el host nunca se ve alterado.");
+            FlatSettings.btnRow(t, "mo-prof-balanced", "Perfil: Equilibrado", () -> Profiles.apply("balanced"));
+            FlatSettings.btnRow(t, "mo-prof-battle", "Perfil: Batalla grande", () -> Profiles.apply("battle"));
+            FlatSettings.btnRow(t, "mo-prof-extreme", "Perfil: Extremo (mapas/batallas enormes)", () -> Profiles.apply("extreme"));
+            FlatSettings.btnRow(t, "mo-diag", "Diagnóstico: estado de todos los módulos", Diagnostics::report);
+            FlatSettings.hdr(t, "adv", "Ajustes individuales");
+            t.checkPref("mo-boost", true);
+            t.checkPref("mo-memlog", true);
             t.sliderPref("mo-conv-max", 4, 1, 16, 1, i -> i <= 1 ? "apagado" : "1 de cada " + i);
             t.sliderPref("mo-conv-budget", 10, 0, 40, 1, i -> i <= 0 ? "máximo fijo" : i + " ms");
             t.sliderPref("mo-conv-near", 10, 5, 30, 1, i -> (i / 10f) + " pantallas");
+            t.checkPref("mo-conv-online", true);
             t.sliderPref("mo-conv-items", 0, 0, 16, 1, i -> i <= 0 ? "nunca" : "< " + i + " px");
             t.checkPref("mo-cam-linear", true);
             t.checkPref("mo-cam-snap", false);

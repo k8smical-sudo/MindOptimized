@@ -52,6 +52,12 @@ public class PhysicsThrottle{
         Events.run(Trigger.update, this::poll);
     }
 
+    public String status(){
+        if(failed) return "desactivada (no se encontró AsyncCore/PhysicsProcess)";
+        if(proxy == null) return budgetMs > 0 ? "esperando a enlazar" : "apagada (presupuesto 0)";
+        return "activa, salto 1/" + k + ", coste " + String.format("%.2f", runCostNs / 1_000_000f) + " ms/ejecución";
+    }
+
     // ------------------------------------------------------------------ sondeo (hilo principal)
 
     private void poll(){
