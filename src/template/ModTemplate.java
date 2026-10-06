@@ -67,6 +67,15 @@ public class ModTemplate extends Mod{
                     monitor = null;
                     Log.err("[MO] no se pudo iniciar SysMonitor", t);
                 }
+                // Hardware primero: GL ya está activo en este hilo y el resto puede consultarlo.
+                try{
+                    HardwareProfile.detect();
+                    BackendSelector.install();
+                    ApiProbe.runOnce();
+                    arc.util.Time.run(150f, HardwareProfile::suggestOnce);
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo iniciar el perfilado de hardware", t);
+                }
                 try{
                     MemGuard.install();
                 }catch(Throwable t){
@@ -193,6 +202,15 @@ public class ModTemplate extends Mod{
             FlatSettings.btnRow(t, "mo-prof-battle", "Perfil: Batalla grande", () -> Profiles.apply("battle"));
             FlatSettings.btnRow(t, "mo-prof-extreme", "Perfil: Extremo (mapas/batallas enormes)", () -> Profiles.apply("extreme"));
             FlatSettings.btnRow(t, "mo-diag", "Diagnóstico: estado de todos los módulos", Diagnostics::report);
+            FlatSettings.hdr(t, "hw", "Hardware y gráficos");
+            FlatSettings.noteRow(t, "hw", HardwareProfile.summary());
+            FlatSettings.title("mo-backend", "Backend gráfico preferido");
+            t.sliderPref("mo-backend", 0, 0, 2, 1, BackendSelector::prefLabel);
+            FlatSettings.noteRow(t, "hw2", "Hoy este APK solo trae OpenGL ES (Arc no incluye backend Vulkan): la preferencia se guarda y se aplicará cuando exista uno. "
+                + "Efectivo ahora: " + BackendSelector.effectiveText() + ".");
+            FlatSettings.btnRow(t, "mo-hw-apply", "Aplicar perfil recomendado para este equipo", () -> Profiles.apply(HardwareProfile.recommended()));
+            FlatSettings.btnRow(t, "mo-hw-probe", "Sondeo de APIs de audio y gráficos (al log)", ApiProbe::run);
+            FlatSettings.btnRow(t, "mo-hw-restart", "Cerrar el juego (para reabrirlo)", BackendSelector::restartNow);
             FlatSettings.hdr(t, "adv", "Ajustes individuales");
             t.checkPref("mo-boost", true);
             t.checkPref("mo-memlog", true);
