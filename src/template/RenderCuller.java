@@ -84,7 +84,34 @@ public class RenderCuller{
         Events.run(Trigger.drawOver, this::applyBlockCull);
         Events.run(Trigger.postDraw, this::onPostDraw);
         Events.run(Trigger.update, this::onUpdate);
-        Events.on(WorldLoadEvent.class, e -> resetSleep());
+        Events.on(WorldLoadEvent.class, e -> {
+            resetSleep();
+            Time.run(30f, this::repairDisabled);
+        });
+    }
+
+    /**
+     * Repara partidas guardadas con una versión anterior del mod, que dormía fábricas poniendo enabled=false y el juego
+     * lo guardaba: al cargar aparecían en estado morado (deshabilitadas por lógica) para siempre.
+     *
+     * Es seguro re-habilitar todo: lo que está deshabilitado de verdad lo vuelve a deshabilitar el juego en su update
+     * (equipos derelictos, etc.) o un procesador lógico que lo controle, y esos se saltan aquí.
+     */
+    private void repairDisabled(){
+        if(Vars.net.client() || !Vars.state.isGame()) return;
+        try{
+            int n = 0;
+            for(int i = 0; i < Groups.build.size(); i++){
+                Building b = Groups.build.index(i);
+                if(b != null && !b.enabled && !controlled(b)){
+                    b.enabled = true;
+                    n++;
+                }
+            }
+            if(n > 0) Log.info("[MO] reparadas " + n + " construcciones que estaban deshabilitadas (estado morado) por una versión anterior del mod");
+        }catch(Throwable t){
+            Refl.once("reparar construcciones deshabilitadas", t);
+        }
     }
 
     private void readSettings(){
@@ -337,14 +364,13 @@ public class RenderCuller{
     private void forceSleep(Building b){
         try{
             fSleepTime.setFloat(b, 61f);
-            b.enabled = false; // dormida no debe seguir pidiendo energía al grafo; el tick de puesta al día la pide de golpe
+            // NO se toca b.enabled: el juego lo guarda en la partida y "false" se muestra como deshabilitado por lógica (morado).
             b.sleep();
         }catch(Throwable ignored){
         }
     }
 
     private void forceWake(Building b, int period){
-        b.enabled = true;
         b.noSleep();
         if(period > 1){
             try{

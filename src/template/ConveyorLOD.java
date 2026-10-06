@@ -77,8 +77,17 @@ public final class ConveyorLOD{
 
         int n = 0;
         capById = new int[Vars.content.blocks().size + 1];
+        StringBuilder skipped = new StringBuilder();
         for(Block b : Vars.content.blocks()){
-            if(b.getClass() != Conveyor.class) continue; // solo la clase exacta: blindadas y demás conservan su lógica
+            // El contenido se declara como new Conveyor("nombre"){{ ... }}, o sea una subclase ANÓNIMA: se desenvuelve hasta
+            // la clase declarada (igual que hace el propio juego al buscar el tipo de edificio).
+            Class<?> k = b.getClass();
+            while(k.isAnonymousClass()) k = k.getSuperclass();
+            if(k != Conveyor.class){
+                // blindadas y demás subclases con lógica propia se dejan como están
+                if(Conveyor.class.isInstance(b)) skipped.append(b.name).append(' ');
+                continue;
+            }
             final Conveyor c = (Conveyor)b;
             // Tope de k que conserva el rendimiento: floor(itemSpace / velocidad) - 1, con itemSpace = 0.4
             if(b.id >= 0 && b.id < capById.length) capById[b.id] = Math.max(1, (int)(0.4f / Math.max(0.001f, c.speed)) - 1);
@@ -86,7 +95,8 @@ public final class ConveyorLOD{
             if(Refl.set(c, "buildType", prov)) n++;
         }
         registered = n;
-        Log.info("[MO] ConveyorLOD: " + n + " tipos de cinta con simulación por niveles");
+        Log.info("[MO] ConveyorLOD: " + n + " tipos de cinta con simulación por niveles"
+            + (skipped.length() > 0 ? " (sin tocar: " + skipped.toString().trim() + ")" : ""));
         if(n == 0) Log.err("[MO] ConveyorLOD: no se pudo asignar buildType; función inactiva");
 
         Events.run(Trigger.update, ConveyorLOD::tick);

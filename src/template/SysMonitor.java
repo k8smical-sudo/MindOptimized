@@ -371,13 +371,19 @@ public class SysMonitor{
         int rank = 0;
         for(Th t : list){
             if(rank >= RANK_PRIO.length || t.pct < 25f) break;
-            if(t.name.startsWith("MO-Monitor")) continue;
+            if(t.name.startsWith("MO-Monitor") || isRuntimeThread(t.name)) continue;
             int want = RANK_PRIO[rank++];
             if(t.prio != want && setPriority(t.tid, want)){
                 Log.info("[MO] balanceador: " + t.name + " (tid " + t.tid + ", " + Math.round(t.pct) + "%) -> prioridad " + want);
                 t.prio = want;
             }
         }
+    }
+
+    /** Hilos del propio runtime de Android (GC, JIT, binder...): subirles la prioridad le quita CPU al juego. */
+    private static boolean isRuntimeThread(String n){
+        return n.contains("Daemon") || n.startsWith("Jit") || n.startsWith("Signal") || n.startsWith("Binder")
+            || n.startsWith("binder") || n.startsWith("ReferenceQueue") || n.startsWith("Finalizer");
     }
 
     /** tid 0 = hilo actual. */
