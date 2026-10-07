@@ -77,6 +77,11 @@ public class ModTemplate extends Mod{
                     Log.err("[MO] no se pudo iniciar el perfilado de hardware", t);
                 }
                 try{
+                    FramePacer.install();
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo iniciar FramePacer", t);
+                }
+                try{
                     MemGuard.install();
                 }catch(Throwable t){
                     Log.err("[MO] no se pudo iniciar MemGuard", t);
@@ -211,6 +216,14 @@ public class ModTemplate extends Mod{
             FlatSettings.btnRow(t, "mo-hw-apply", "Aplicar perfil recomendado para este equipo", () -> Profiles.apply(HardwareProfile.recommended()));
             FlatSettings.btnRow(t, "mo-hw-probe", "Sondeo de APIs de audio y gráficos (al log)", ApiProbe::run);
             FlatSettings.btnRow(t, "mo-hw-restart", "Cerrar el juego (para reabrirlo)", BackendSelector::restartNow);
+            FlatSettings.hdr(t, "pace", "Frame pacing (sin esperar al vsync)");
+            FlatSettings.noteRow(t, "pace", "Entrega los frames a Android en una cadencia fija y a la hora justa, sin que el juego se bloquee esperando buffers. "
+                + "No muestra más frames de los que da tu pantalla (la tuya: " + String.format(java.util.Locale.ROOT, "%.0f", FramePacer.hz()) + " Hz medidos); "
+                + "gana en estabilidad, latencia y consumo. Con la cadencia en 'Libre' no hace nada.");
+            FlatSettings.title("mo-pace-mode", "Cadencia de presentación");
+            t.sliderPref("mo-pace-mode", 0, 0, 4, 1, FramePacer::modeLabel);
+            FlatSettings.title("mo-pace-lead", "Colchón de latencia (frames)");
+            t.sliderPref("mo-pace-lead", 1, 0, 3, 1, i -> i == 0 ? "0 · mínima latencia" : i >= 3 ? "3 · holgado (como vanilla)" : String.valueOf(i));
             FlatSettings.hdr(t, "adv", "Ajustes individuales");
             t.checkPref("mo-boost", true);
             t.checkPref("mo-memlog", true);

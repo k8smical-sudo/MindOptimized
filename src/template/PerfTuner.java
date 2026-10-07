@@ -64,7 +64,8 @@ public class PerfTuner{
 
     private void applySettings(){
         // --- VSync ---
-        boolean off = Core.settings.getBool(K_VSYNC, false);
+        // Con el pacing propio activo el swap interval debe ser 0: el compositor respeta la hora de presentación que fijamos.
+        boolean off = Core.settings.getBool(K_VSYNC, false) || FramePacer.active;
         // Se reaplica cada ~16 sondeos (~500 frames): si Android recrea el contexto GL, el swap interval se pierde.
         if(!vsyncKnown || off != vsyncOff || (off && ++reapply >= 16)){
             reapply = 0;
@@ -75,7 +76,7 @@ public class PerfTuner{
 
         // --- límite de FPS ---
         fpsCap = Core.settings.getInt(K_FPS, 0);
-        boolean own = vsyncOff || fpsCap > 0;
+        boolean own = vsyncOff || fpsCap > 0 || FramePacer.active;
         liftVanillaCap(own);
 
         // --- frecuencia de pantalla ---
@@ -136,6 +137,10 @@ public class PerfTuner{
 
     /** Frame pacing: duerme lo que sobra del frame para que el tiempo entre frames sea constante. */
     private void pace(){
+        if(FramePacer.active){ // el pacer ya reparte los frames; dos limitadores a la vez se estorban
+            next = 0;
+            return;
+        }
         if(fpsCap <= 0){
             next = 0;
             return;

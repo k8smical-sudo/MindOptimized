@@ -14,6 +14,7 @@ public final class Diagnostics{
     public static String build(){
         StringBuilder sb = new StringBuilder();
         sb.append("Hardware: ").append(HardwareProfile.oneLine()).append(" | backend efectivo ").append(BackendSelector.effectiveText()).append('\n');
+        sb.append("Pacing: ").append(FramePacer.active ? FramePacer.status().replaceAll("\\[[^\\]]*\\]", "") : "apagado").append('\n');
         sb.append("CPU: ").append(Cores.get().summary).append('\n');
         sb.append("Memoria: ").append(MemGuard.snapshot()).append('\n');
         sb.append("Medidor de lógica: ").append(LogicTimer.inst != null ? "activo, " + String.format("%.2f", LogicTimer.ms()) + " ms" : "NO instalado").append('\n');

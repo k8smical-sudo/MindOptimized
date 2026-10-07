@@ -50,6 +50,9 @@ public class SysMonitor{
 
     private static final int MAX_CORES = 64;
 
+    /** Tiempo de GPU por frame (ms), media del último periodo. Lo usa FramePacer para saber cuándo estará listo un frame. */
+    public static volatile float gpuMsFrame;
+
     private int mode = 2, counter;
     private boolean balance = true;
     private float px = 41f, py = 13f;
@@ -332,6 +335,7 @@ public class SysMonitor{
         sb.append("\n[accent]GPU[] ");
         if(gpuOn && gf > 0){
             float busy = (float)Math.min(100.0, ns / (wall * 1e9) * 100.0);
+            gpuMsFrame = (float)(ns / 1e6 / gf);
             sb.append(col(busy)).append(Math.round(busy)).append("%[] ")
                 .append(String.format("%.1fms/frame", ns / 1e6 / gf));
         }else{
@@ -341,6 +345,8 @@ public class SysMonitor{
         if(hw >= 0) sb.append("  [lightgray]hw ").append(hw).append("%[]");
         sb.append("  [gray]").append(Math.round(frames / wall)).append(" f/s[]");
 
+        String pace = FramePacer.status();
+        if(!pace.isEmpty() && FramePacer.active) sb.append('\n').append(pace);
         String conv = ConveyorLOD.status();
         if(!conv.isEmpty()) sb.append('\n').append(conv);
 
