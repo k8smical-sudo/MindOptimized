@@ -117,7 +117,7 @@ public class RenderCuller{
     private void readSettings(){
         on = Core.settings.getBool(K_ON, true);
         cullFog = Core.settings.getBool(K_FOG, true);
-        statsOn = Core.settings.getBool(K_STATS, true);
+        statsOn = Core.settings.getBool(K_STATS, true) && SysMonitor.logStats;
         parallel = Core.settings.getBool(K_PAR, true);
         Cores.get().configure(Core.settings.getInt(K_THREADS, 0));
 
@@ -357,8 +357,21 @@ public class RenderCuller{
     }
 
     /** Un procesador lógico controla este edificio (enabledControlTime > 0): no se toca. */
+    private Field fCtl;
+    private boolean fCtlTried;
+
+    /** Sin boxing: Field.getFloat devuelve un primitivo (antes cada llamada creaba un Float, miles por frame). */
     private boolean controlled(Building b){
-        return Refl.getF(b, "enabledControlTime", 0f) > 0f;
+        if(!fCtlTried){
+            fCtlTried = true;
+            fCtl = Refl.field(Building.class, "enabledControlTime");
+        }
+        if(fCtl == null) return false;
+        try{
+            return fCtl.getFloat(b) > 0f;
+        }catch(Throwable t){
+            return false;
+        }
     }
 
     private void forceSleep(Building b){

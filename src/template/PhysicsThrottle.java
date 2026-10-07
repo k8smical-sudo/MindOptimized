@@ -94,7 +94,7 @@ public class PhysicsThrottle{
             }
         }
 
-        if(polls % 600 == 0){
+        if(polls % 600 == 0 && SysMonitor.logStats){
             Log.info(String.format("[MO] física: unidades=%d coste/ejecución=%.2fms salto=1/%d (ejecutó %d, saltó %d)",
                 Groups.unit.size(), runCostNs / 1_000_000f, k, execs, skips));
             execs = skips = 0;

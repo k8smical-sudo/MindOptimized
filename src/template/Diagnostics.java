@@ -14,6 +14,9 @@ public final class Diagnostics{
     public static String build(){
         StringBuilder sb = new StringBuilder();
         sb.append("Hardware: ").append(HardwareProfile.oneLine()).append(" | backend efectivo ").append(BackendSelector.effectiveText()).append('\n');
+        sb.append("Muesca: ").append(CutoutMode.status()).append('\n');
+        sb.append("Audio (recorte): ").append(AudioTrim.summary()).append('\n');
+        sb.append("GC: ").append(GcGuard.status().isEmpty() ? "sin datos" : GcGuard.status().replaceAll("\\[[^\\]]*\\]", "")).append('\n');
         sb.append("Pacing: ").append(FramePacer.active ? FramePacer.status().replaceAll("\\[[^\\]]*\\]", "") : "apagado").append('\n');
         sb.append("CPU: ").append(Cores.get().summary).append('\n');
         sb.append("Memoria: ").append(MemGuard.snapshot()).append('\n');

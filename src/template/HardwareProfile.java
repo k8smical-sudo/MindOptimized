@@ -217,7 +217,7 @@ public final class HardwareProfile{
             .append(glesVersion == 0 ? "?" : (glesVersion >> 16) + "." + (glesVersion & 0xffff)).append('\n');
         sb.append("Vulkan declarado: ").append(vulkanText()).append(vulkan11() ? "  (>= 1.1)" : "").append('\n');
         sb.append("CPU: ").append(Cores.get().summary).append('\n');
-        sb.append("Audio: motor ").append(audioEngine).append(", ").append(audioNatives).append(" métodos nativos | baja latencia ")
+        sb.append("Audio: ").append(audioEngine).append(" sobre SoLoud (mezcla por software en la CPU, según el log) | baja latencia ")
             .append(lowLatency ? "sí" : "no").append(", pro ").append(proAudio ? "sí" : "no")
             .append(" | salida nativa ").append(outRate).append(" Hz, buffer ").append(outFrames).append(" frames\n");
         sb.append("Nivel de equipo: ").append(tier).append(" -> perfil recomendado: ").append(profileLabel(recommended()));

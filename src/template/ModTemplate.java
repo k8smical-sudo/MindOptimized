@@ -77,6 +77,13 @@ public class ModTemplate extends Mod{
                     Log.err("[MO] no se pudo iniciar el perfilado de hardware", t);
                 }
                 try{
+                    GcGuard.install();
+                    AudioTrim.install();
+                    CutoutMode.install();
+                }catch(Throwable t){
+                    Log.err("[MO] no se pudo iniciar GcGuard/AudioTrim/CutoutMode", t);
+                }
+                try{
                     FramePacer.install();
                 }catch(Throwable t){
                     Log.err("[MO] no se pudo iniciar FramePacer", t);
@@ -174,6 +181,15 @@ public class ModTemplate extends Mod{
         t("mo-mon-y", "Monitor: posición Y (%)", "Posición vertical desde arriba. Por defecto queda bajo el contador de FPS.");
         t("mo-balance", "Balanceador de hilos", "Sube la prioridad de los hilos propios que más CPU usan. Android no permite fijar hilos a núcleos concretos; solo influye en cuál tiene preferencia.");
         t("mo-conv-online", "Cintas simplificadas también como cliente online", "Como cliente de una partida en red, las cintas lejanas se simulan por niveles SOLO en tu dispositivo (el servidor manda). Nunca actúa si eres host. Apágalo si ves desajustes en cintas lejanas.");
+        t("mo-notch", "Ignorar la muesca (notch): usar toda la pantalla", "El juego dibuja también bajo la cámara y el recorte de pantalla. Si el juego aplica sus propios márgenes seguros se conservan; si no, los botones cercanos a la cámara pueden quedar parcialmente tapados. Al apagarlo se restaura la ventana original.");
+        t("mo-snd-ambient", "Bucles ambientales de edificios (taladros, hornos...)", "Apagado = los edificios no emiten su sonido continuo. Quita código Java por frame y voces de audio por cada máquina. Aplica a los edificios nuevos y a los que se recarguen.");
+        t("mo-snd-bullet", "Sonidos de impacto y desaparición de balas", "Apagado = las balas no suenan al impactar ni al desaparecer. En batallas grandes son miles de voces por segundo.");
+        t("mo-snd-shoot", "Sonidos de disparo de armas", "Apagado = las armas no suenan al disparar ni al cargar.");
+        t("mo-snd-unit", "Sonidos de unidades (muerte, caída, motores)", "Apagado = las unidades no emiten esos sonidos, incluidos los bucles de motor.");
+        t("mo-tel-sample", "Intervalo del muestreo de hilos", "Cada cuánto lee el mod el uso de CPU por hilo. Con el texto del monitor en pantalla nunca pasa de 1 s. Más largo = menos trabajo de fondo.");
+        t("mo-tel-gpu", "Medir la GPU en cada frame (solo con el monitor)", "Consultas de tiempo de GPU al final de cada frame. Apágalo si no necesitas la cifra de GPU.");
+        t("mo-tel-log", "Registros periódicos del mod en el log", "Escribe cada ~10 s estadísticas de bloques, cintas, física y monitor. Apagado = el log solo recibe eventos.");
+        t("mo-gc", "Vigilar el recolector de basura y limpiar en momentos seguros", "Mide ciclos de GC y tasa de asignación, avisa de pausas largas y limpia solo en menú o pausa si el heap pasa del 85 %.");
         t("mo-boost", "Más recursos al cargar/jugar mapas enormes", "Pantalla siempre encendida, rendimiento sostenido y aviso a Android (ADPF, Android 12+) de que el juego necesita más CPU durante la carga y con mapas de más de 100 000 edificios. No sube el límite de memoria de la app.");
         t("mo-memlog", "Registrar memoria al cargar mapas", "Durante la carga de un mapa escribe en el log, cada segundo, la memoria Java, nativa y del sistema. Si el juego se cae, las últimas líneas dicen qué memoria se agotó.");
         t("mo-conv-max", "Cintas lejanas: periodo máximo", "Las cintas lejos de la cámara actualizan 1 de cada k ticks (movimiento compensado, mismo flujo). 1 = apagado. El nivel real lo decide el controlador según la carga de la lógica.");
@@ -224,6 +240,31 @@ public class ModTemplate extends Mod{
             t.sliderPref("mo-pace-mode", 0, 0, 4, 1, FramePacer::modeLabel);
             FlatSettings.title("mo-pace-lead", "Colchón de latencia (frames)");
             t.sliderPref("mo-pace-lead", 1, 0, 3, 1, i -> i == 0 ? "0 · mínima latencia" : i >= 3 ? "3 · holgado (como vanilla)" : String.valueOf(i));
+            FlatSettings.hdr(t, "screen", "Pantalla");
+            t.checkPref("mo-notch", false);
+
+            FlatSettings.hdr(t, "audio", "Audio: reducir carga de CPU");
+            FlatSettings.noteRow(t, "audio", "El juego mezcla el audio por software en la CPU (motor SoLoud, lo confirma el log): en un teléfono no existe una mezcla por hardware que activar. "
+                + "Cada voz cuesta mezcla y remuestreo, y cada bucle de edificio cuesta código Java por frame. Estos interruptores silencian clases enteras de sonido para ahorrar CPU en bases y batallas enormes. "
+                + "Se aplican al instante y son reversibles. Fuentes recortables: " + AudioTrim.summary() + ".");
+            t.checkPref("mo-snd-ambient", true, v -> AudioTrim.set("ambient", v));
+            t.checkPref("mo-snd-bullet", true, v -> AudioTrim.set("bullet", v));
+            t.checkPref("mo-snd-shoot", true, v -> AudioTrim.set("shoot", v));
+            t.checkPref("mo-snd-unit", true, v -> AudioTrim.set("unit", v));
+
+            FlatSettings.hdr(t, "tel", "Telemetría y estadísticas");
+            FlatSettings.noteRow(t, "tel", "El log de este equipo no muestra analítica, red ni SDK de terceros: no hay telemetría externa que apagar. "
+                + "Lo que consume CPU son los medidores y los registros periódicos. Aquí se controlan los del mod; para los contadores de MindustryX usa el botón, que guarda en un archivo los ajustes que parecen contadores.");
+            t.sliderPref("mo-tel-sample", 2, 0, 4, 1, i -> i == 0 ? "0,5 s" : i == 1 ? "1 s" : i == 2 ? "2 s" : i == 3 ? "5 s" : "10 s");
+            t.checkPref("mo-tel-gpu", true);
+            t.checkPref("mo-tel-log", true);
+            FlatSettings.btnRow(t, "mo-tel-keys", "Listar ajustes que parecen contadores (a archivo)", ApiProbe::settingsKeys);
+
+            FlatSettings.hdr(t, "gc", "Memoria y recolector de basura");
+            FlatSettings.noteRow(t, "gc", "Android 14 ya usa el recolector 'generational CC' (el mejor disponible; una app no puede elegir otro). "
+                + "El mod mide ciclos y tasa de asignación (se ve en el monitor), avisa de pausas largas y limpia solo en momentos seguros.");
+            t.checkPref("mo-gc", true);
+
             FlatSettings.hdr(t, "adv", "Ajustes individuales");
             t.checkPref("mo-boost", true);
             t.checkPref("mo-memlog", true);

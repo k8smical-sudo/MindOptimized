@@ -49,6 +49,7 @@ public class TextureScaler{
 
     public static final Cat[] CATS = {
         new Cat("terrain", "Terreno (pisos)", "Pisos sólidos del mapa (arena, pasto, nieve, piedra...) y sus bordes (-edge). Cada casilla usa una variante al azar. Los líquidos van en su propia categoría; letras, zonas de núcleo y spawn NO se tocan."),
+        new Cat("vent", "Cráteres, géiseres y rocas calientes", "Cráteres y respiraderos de donde se extrae vapor (energía), calor o líquidos: vents de Erekir, cráteres del suelo y rocas calientes (hotrock/magmarock). Separados del terreno para que decidas su definición por aparte."),
         new Cat("liquid", "Líquidos del terreno", "Pisos líquidos (agua, brea, escoria, criofluido, arkycita...) y sus bordes. Solo cambia el sprite base: el brillo lo dibujan shaders propios."),
         new Cat("wall", "Paredes del terreno", "Paredes estáticas y acantilados del mapa."),
         new Cat("ore", "Minerales", "Menas del suelo y menas de pared (ore-wall-*, Erekir)."),
@@ -124,12 +125,14 @@ public class TextureScaler{
     private static final Class<?> C_WALL = Refl.cls(ENV + "StaticWall");
     private static final Class<?> C_CLIFF = Refl.cls(ENV + "Cliff");
     private static final Class<?> C_PROP = Refl.cls(ENV + "Prop");
+    private static final Class<?> C_VENT = Refl.cls(ENV + "SteamVent");
+    private static final Pattern VENT_RE = Pattern.compile("(^|-)(vent|crater|craters|geyser|hotrock|magmarock)s?\\d*(-|$)", Pattern.CASE_INSENSITIVE);
 
     private HashMap<String, String> owner;
     private final ArrayList<Object[]> jobs = new ArrayList<>(); // {contenido, nombre, categoría}
     private int ji;
     private boolean indexing;
-    private final ArrayList<String> liquidLog = new ArrayList<>();
+    private final ArrayList<String> liquidLog = new ArrayList<>(), ventLog = new ArrayList<>();
 
     // escalado
     private final HashMap<String, Integer> appliedRegion = new HashMap<>(), appliedAlpha = new HashMap<>();
@@ -186,6 +189,10 @@ public class TextureScaler{
         if(Refl.is(b, C_FLOOR)){
             if(Refl.getB(b, "allowCorePlacement", false) || Refl.is(b, C_SPAWN)) return "protected";
             if(Refl.getB(b, "wallOre", false) || Refl.is(b, C_ORE)) return "ore";
+            if(Refl.is(b, C_VENT) || VENT_RE.matcher(String.valueOf(b.name)).find()){
+                ventLog.add(String.valueOf(b.name));
+                return "vent";
+            }
             if(isLiquidFloor(b)){
                 liquidLog.add(String.valueOf(b.name));
                 return "liquid";
@@ -443,6 +450,7 @@ public class TextureScaler{
         for(Cat c : CATS) msg.append(c.id).append('=').append(byCat.get(c.id).size()).append(' ');
         Log.info("[MO] texturas indexadas (" + all.size() + " en atlas): " + msg + "protegidas=" + byCat.get("protected").size() + " blur=" + blurList.size());
         Log.info("[MO] pisos clasificados como LÍQUIDO (" + liquidLog.size() + "): " + String.join(", ", liquidLog));
+        Log.info("[MO] pisos clasificados como CRÁTER/GÉISER/ROCA CALIENTE (" + ventLog.size() + "): " + String.join(", ", ventLog));
 
         ready = true;
         blurOn = false; // fuerza que pollCats re-procese los '-blur' en el primer ciclo si el toggle está activo

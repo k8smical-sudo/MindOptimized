@@ -68,14 +68,47 @@ public final class ApiProbe{
         }catch(Throwable t){
             Refl.once("ApiProbe", t);
         }
+        writeFile("mo-probe.txt");
+    }
+
+    /** Además del log (que adb recorta), se guarda en un archivo de la carpeta de datos del juego. */
+    private static void writeFile(String name){
         try{
-            // Además del log (que adb recorta), se guarda en un archivo de la carpeta de datos del juego.
-            arc.files.Fi f = Core.files.local("mo-probe.txt");
+            arc.files.Fi f = Core.files.local(name);
             f.writeString(buf.toString(), false);
             Log.info("[MO] sonda: guardada en " + f.absolutePath());
         }catch(Throwable t){
             Refl.once("ApiProbe (archivo)", t);
         }
+    }
+
+    /**
+     * Lista los ajustes guardados cuyo nombre sugiere un contador, panel de depuración o estadística (los de este mod no).
+     * Sirve para localizar las claves de los contadores de MindustryX y poder apagarlos desde aquí con seguridad.
+     */
+    public static void settingsKeys(){
+        buf.setLength(0);
+        try{
+            Object it = Core.settings.getClass().getMethod("keys").invoke(Core.settings);
+            Pattern p = Pattern.compile("fps|debug|overlay|perf|stat|info|show|draw|mem|ms|profil|hud|tele|count|metric|monitor|time|frame",
+                Pattern.CASE_INSENSITIVE);
+            int n = 0, total = 0;
+            if(it instanceof Iterable<?> iter){
+                for(Object k : iter){
+                    total++;
+                    String key = String.valueOf(k);
+                    if(key.startsWith("mo-") || key.startsWith("flat-")) continue;
+                    if(p.matcher(key).find()){
+                        out("[MO] ajustes: " + key + " = " + Core.settings.get(key, null));
+                        n++;
+                    }
+                }
+            }
+            out("[MO] ajustes: " + n + " claves candidatas de " + total);
+        }catch(Throwable t){
+            Refl.once("ApiProbe.settingsKeys", t);
+        }
+        writeFile("mo-settings-keys.txt");
     }
 
     private static void dump(String cn, String regex, int max){

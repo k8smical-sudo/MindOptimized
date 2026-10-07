@@ -34,7 +34,7 @@ public class PerfTuner{
     private boolean vsyncOff, vsyncKnown;
     private int fpsCap, lastRefresh = -1;
     private long next;
-    private boolean capLifted;
+    private boolean capLifted, vsyncLogged, lastLoggedOff;
 
     private Governor governor;
     private boolean govFailed;
@@ -112,7 +112,12 @@ public class PerfTuner{
             Class<?> disp = Class.forName("android.opengl.EGLDisplay");
             Object display = egl.getMethod("eglGetCurrentDisplay").invoke(null);
             Object ok = egl.getMethod("eglSwapInterval", disp, int.class).invoke(null, display, off ? 0 : 1);
-            Log.info("[MO] vsync " + (off ? "OFF" : "ON") + " (eglSwapInterval) -> " + ok);
+            // Solo se escribe al cambiar: el valor se reaplica cada pocos segundos y no hace falta repetirlo en el log.
+            if(!vsyncLogged || lastLoggedOff != off){
+                vsyncLogged = true;
+                lastLoggedOff = off;
+                Log.info("[MO] vsync " + (off ? "OFF" : "ON") + " (eglSwapInterval) -> " + ok);
+            }
         }catch(Throwable t){
             Log.err("[MO] no se pudo cambiar eglSwapInterval", t);
         }

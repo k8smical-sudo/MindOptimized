@@ -151,7 +151,7 @@ public final class ConveyorLOD{
             status = "[accent]Cintas[] nivel " + level + "/" + LEVELS + "  lejos 1/" + pFar + "  lógica " + String.format("%.1f", LogicTimer.ms()) + " ms";
         }
 
-        if((frame % 600) == 0){
+        if((frame % 600) == 0 && SysMonitor.logStats){
             Log.info("[MO] cintas: nivel=" + level + "/" + LEVELS + " cerca=1 medio=1/" + pMid + " lejos=1/" + pFar
                 + " lógica=" + String.format("%.2f", LogicTimer.ms()) + "ms entidades=" + mindustry.gen.Groups.build.size());
         }

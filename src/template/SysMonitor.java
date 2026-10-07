@@ -53,6 +53,11 @@ public class SysMonitor{
     /** Tiempo de GPU por frame (ms), media del último periodo. Lo usa FramePacer para saber cuándo estará listo un frame. */
     public static volatile float gpuMsFrame;
 
+    /** Los registros periódicos del mod ([MO] monitor / cintas / física / bloques por frame) solo se escriben si es true. */
+    public static volatile boolean logStats = true;
+    private static final int[] SAMPLE_MS = {500, 1000, 2000, 5000, 10000};
+    private volatile int sampleMs = 2000;
+
     private int mode = 2, counter;
     private boolean balance = true;
     private float px = 41f, py = 13f;
@@ -112,6 +117,7 @@ public class SysMonitor{
         label.setSize(Scl.scl(470f), Scl.scl(170f));
         label.visible(() -> mode == 2 && Vars.state.isGame());
         label.update(() -> {
+            if(mode != 2) return; // oculto: no se hace ningún trabajo
             String t = text;
             if(t != shown){
                 shown = t;
@@ -146,6 +152,10 @@ public class SysMonitor{
 
     private void readSettings(){
         mode = Core.settings.getInt(K_MODE, 2);
+        logStats = Core.settings.getBool("mo-tel-log", true);
+        int base = SAMPLE_MS[Math.max(0, Math.min(SAMPLE_MS.length - 1, Core.settings.getInt("mo-tel-sample", 2)))];
+        // Con el texto en pantalla hace falta refrescar al menos cada segundo; si solo trabaja el balanceador basta el intervalo elegido.
+        sampleMs = mode == 2 ? Math.min(base, 1000) : base;
         balance = Core.settings.getBool(K_BAL, true);
         px = Core.settings.getInt(K_X, 41);
         py = Core.settings.getInt(K_Y, 13);
@@ -154,7 +164,7 @@ public class SysMonitor{
         if(need && !running) startSampler();
         else if(!need && running) stopSampler();
 
-        boolean wantGpu = mode > 0;
+        boolean wantGpu = mode > 0 && Core.settings.getBool("mo-tel-gpu", true);
         if(wantGpu && !gpuOn && !gpu.failed){
             gpuOn = gpu.init();
         }else if(!wantGpu && gpuOn){
@@ -182,11 +192,11 @@ public class SysMonitor{
     private void samplerLoop(){
         setPriority(0, 10); // THREAD_PRIORITY_BACKGROUND: que corra en núcleos débiles y no moleste al juego
         long last = System.nanoTime();
-        int round = 0;
+        long lastLog = 0L, lastBal = 0L;
 
         while(running){
             try{
-                Thread.sleep(500);
+                Thread.sleep(sampleMs);
             }catch(InterruptedException e){
                 if(!running) break;
             }
@@ -201,13 +211,15 @@ public class SysMonitor{
                 String t = compose(wall);
                 text = t;
 
-                if(mode > 0 && round % 20 == 19){
+                long nowMs = System.currentTimeMillis();
+                if(mode > 0 && logStats && nowMs - lastLog >= 10_000L){
+                    lastLog = nowMs;
                     Log.info("[MO] monitor | " + t.replace("\n", " | ").replaceAll("\\[[^\\]]*\\]", ""));
                 }
-                if(balance && round % 4 == 3){
+                if(balance && nowMs - lastBal >= 2_000L){
+                    lastBal = nowMs;
                     balanceThreads();
                 }
-                round++;
             }catch(Throwable th){
                 Log.err("[MO] muestreo falló", th);
                 try{
@@ -345,6 +357,8 @@ public class SysMonitor{
         if(hw >= 0) sb.append("  [lightgray]hw ").append(hw).append("%[]");
         sb.append("  [gray]").append(Math.round(frames / wall)).append(" f/s[]");
 
+        String gc = GcGuard.status();
+        if(!gc.isEmpty()) sb.append('\n').append(gc);
         String pace = FramePacer.status();
         if(!pace.isEmpty() && FramePacer.active) sb.append('\n').append(pace);
         String conv = ConveyorLOD.status();
